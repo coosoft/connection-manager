@@ -79,7 +79,7 @@ use constant TOOLBARS_TOTAL_HEIGHT => 25;
 
 # Constant for the namme of the user's settings file.
 
-use constant USER_SETTINGS_FILE => "connection-manager";
+use constant USER_SETTINGS_FILE => "connection-managerrc";
 
 # ***** FUNCTIONAL PROTOTYPES *****
 
@@ -419,7 +419,7 @@ sub handle_rdp_menu_entry($)
         $screen,
         $warning_msg);
 
-    # If we don't have any connection details name then ask for them.
+    # If we don't have any connection details then ask for them.
 
     if (not defined($details->{machine}) or not defined($details->{user_name}))
     {
@@ -479,38 +479,49 @@ sub handle_rdp_menu_entry($)
             # Sort out the command and its arguments.
 
             push(@args, "xfreerdp");
-            push(@args, "-a", $details->{colour_depth});
-            push(@args, "-x", $details->{experience_level});
-            push(@args, "-u", $details->{user_name});
+            push(@args, "/v:" . $details->{machine});
+            push(@args, "/port:" . $details->{port})
+                if (defined($details->{port}));
+            push(@args, "/u:" . $details->{user_name});
+            push(@args, "/d:" . $details->{domain})
+                if (defined($details->{domain}));
             if ($details->{window_mode} eq "fullscreen")
             {
-                push(@args, "-f");
+                push(@args, "/f");
             }
             elsif ($details->{window_mode} eq "maximised-no-boarders")
             {
-                push(@args,
-                     "-g",
-                     sprintf("%ux%u+0+0",
-                             $desktop_width,
-                             $desktop_height - TOOLBARS_TOTAL_HEIGHT),
-                     "-D");
+                push(@args, "/workarea", "-decorations");
             }
-            elsif ($details->{window_mode} =~ m/^\d+x\d+(?:[-+]\d+[-+]\d+)?$/
-                   or $details->{window_mode} =~ m/^\d+%$/
-                   or $details->{window_mode} eq "workarea")
+            elsif ($details->{window_mode} =~ m/^\d+x\d+$/)
             {
-                push(@args, "-g", $details->{window_mode});
+                push(@args, "/size:" . $details->{window_mode});
             }
-            push(@args, "-d", $details->{domain})
-                if (defined($details->{domain}));
-            push(@args, "-K") unless (defined($details->{keyboard_grab}));
-            push(@args, "-t", $details->{port}) if (defined($details->{port}));
-            push(@args, "-z") if ($details->{compress});
-            push(@args, "--plugin", "cliprdr") if ($details->{share_clipboard});
-            push(@args, "--plugin", "rdpdr", "--data",
-                 "disk:Share:" . $details->{share}, "--")
-                if (defined($details->{share}));
-            push(@args, $details->{machine});
+            push(@args, "/bpp:" . $details->{colour_depth});
+            push(@args,
+                 ($details->{keyboard_grab} ? "+" : "-") . "grab-keyboard");
+            push(@args,
+                 ($details->{share_clipboard} ? "+" : "-") . "clipboard");
+            if (defined($details->{disk_shares})
+                and $details->{disk_shares} =~
+                    m/^[^ ,;]+,[^,;]+(?:;[^ ,;]+,[^,;]+)*$/)
+            {
+                foreach my $entry (split(";", $details->{disk_shares}))
+                {
+                    push(@args, "/drive:" . $entry);
+                }
+            }
+            push(@args, "/sound") if ($details->{sound});
+            push(@args, "/microphone") if ($details->{microphone});
+            push(@args, ($details->{compress} ? "+" : "-") . "compression");
+            push(@args, "-cert-ignore") if ($details->{ignore_certs});
+            push(@args, ($details->{smooth_fonts} ? "+" : "-") . "fonts");
+            push(@args, ($details->{compositor} ? "+" : "-") . "aero");
+            push(@args, ($details->{window_drag} ? "+" : "-") . "window-drag");
+            push(@args,
+                 ($details->{menu_animations} ? "+" : "-") . "menu-anims");
+            push(@args, ($details->{themes} ? "+" : "-") . "themes");
+            push(@args, ($details->{wallpaper} ? "+" : "-") . "wallpaper");
 
             # Now run it via Expect so we can feed in the password and watch for
             # errors.
@@ -540,9 +551,9 @@ sub handle_rdp_menu_entry($)
                             {
                                 $warning_msg =
                                     __("The key for the remote host has "
-                                           . "changed.\n"
-                                       . "Edit ~/.freerdp/known_hosts if this "
-                                           . "is expected,\n"
+                                           . "changed.\n\n"
+                                       . "Edit ~/.config/freerdp/known_hosts "
+                                           . "if this is expected,\n"
                                        . "otherwise something nasty has "
                                            . "happened!");
                                 return;
@@ -553,7 +564,7 @@ sub handle_rdp_menu_entry($)
                                 $warning_msg = __("Incorrect password.");
                                 return;
                             }],
-                       [qr/No address associated with hostname/ =>
+                       [qr/tcp_connect: getaddrinfo/ =>
                             sub
                             {
                                 $warning_msg =
@@ -971,7 +982,7 @@ sub run_command(@)
 
     }
 
-    # Wait a bit and then make sure that things have worked ok.
+    # Wait a bit and them make sure that things have worked ok.
 
     sleep(1);
     if (not defined($child)
@@ -1088,78 +1099,52 @@ sub load_settings()
 
             foreach my $entry (@$list)
             {
-                if (scalar(keys($entry)) > 0)
+                my %defaults;
+                my $user_name = ($ENV{LOGNAME} or $ENV{USERNAME} or $ENV{USER});
+                if (scalar(keys(%$entry)) > 0)
                 {
                     if ($entry->{type} eq "title")
                     {
-                        if (not exists($entry->{separator}))
-                        {
-                            $entry->{separator} = undef;
-                        }
+                        %defaults = (separator => undef);
                     }
-                    if ($entry->{type} eq "rdp")
+                    elsif ($entry->{type} eq "rdp")
                     {
-                        if (not exists($entry->{port}))
-                        {
-                            $entry->{port} = undef;
-                        }
-                        if (not exists($entry->{domain_name}))
-                        {
-                            $entry->{domain_name} = undef;
-                        }
-                        if (not exists($entry->{window_mode}))
-                        {
-                            $entry->{window_mode} = "maximised-no-boarders";
-                        }
-                        if (not exists($entry->{colour_depth}))
-                        {
-                            $entry->{colour_depth} = 32;
-                        }
-                        if (not exists($entry->{keyboard_grab}))
-                        {
-                            $entry->{keyboard_grab} = 1;
-                        }
-                        if (not exists($entry->{share_clipboard}))
-                        {
-                            $entry->{share_clipboard} = 1;
-                        }
-                        if (not exists($entry->{experience_level}))
-                        {
-                            $entry->{experience_level} = 80;
-                        }
-                        if (not exists($entry->{share}))
-                        {
-                            $entry->{share} = undef;
-                        }
-                        if (not exists($entry->{compress}))
-                        {
-                            $entry->{compress} = 1;
-                        }
+                        %defaults = (port            => undef,
+                                     user_name       => $user_name,
+                                     domain_name     => undef,
+                                     window_mode     => "maximised-no-boarders",
+                                     colour_depth    => 32,
+                                     keyboard_grab   => 1,
+                                     share_clipboard => 1,
+                                     disk_shares     => undef,
+                                     sound           => undef,
+                                     microphone      => undef,
+                                     compress        => 1,
+                                     ignore_certs    => undef,
+                                     smooth_fonts    => 1,
+                                     compositor      => 1,
+                                     window_drag     => 1,
+                                     menu_animations => 1,
+                                     themes          => 1,
+                                     wallpaper       => 1);
                     }
                     elsif ($entry->{type} eq "vnc")
                     {
-                        if (not exists($entry->{port}))
-                        {
-                            $entry->{port} = 1;
-                        }
-                        if (not exists($entry->{profile}))
-                        {
-                            $entry->{profile} = "default";
-                        }
+                        %defaults = (port    => 1,
+                                     profile => "default");
                     }
                     elsif ($entry->{type} eq "ssh")
                     {
-                        if (not exists($entry->{port}))
+                        %defaults = (port       => undef,
+                                     user_name  => $user_name,
+                                     keep_alive => undef,
+                                     x11_tunnel => undef);
+                    }
+                    while (my ($key, $value) = each(%defaults))
+                    {
+                        if (not exists($entry->{$key}))
                         {
-                            $entry->{port} = undef;
-                        }
-                        if (not exists($entry->{keep_alive}))
-                        {
-                            $entry->{keep_alive} = undef;
-                        }
-                        if (not exists($entry->{x11_tunnel}))
-                        {
-                            $entry->{x11_tunnel} = undef;
+                            $entry->{$key} = $value;
                         }
                     }
                 }
@@ -1176,62 +1161,78 @@ sub load_settings()
                            . "*):\n"
                        . "# [\n"
                        . "#     {\n"
-                       . '#        "name"             : "My Development '
+                       . '#         "name"             : "My Development '
                            . 'Desktop",' . "\n"
-                       . '#        "type"             : "rdp",' . "\n"
-                       . '#        "machine"          : "linux-dev",' . "\n"
-                       . '#        "port"             : 3389,'
+                       . '#         "type"             : "rdp",' . "\n"
+                       . '#         "machine"          : "linux-dev",' . "\n"
+                       . '#         "port"             : 3389,'
                            . '                     *' . "\n"
-                       . '#        "user_name"        : "fblogs",' . "\n"
-                       . '#        "domain_name"      : null,'
+                       . '#         "user_name"        : "fblogs",' . "\n"
+                       . '#         "domain_name"      : null,'
                            . '                     *' . "\n"
-                       . '#        "window_mode"      : '
+                       . '#         "window_mode"      : '
                            . '"maximised-no-boarders",  *' . "\n"
-                       . '#        "colour_depth"     : 32,'
+                       . '#         "colour_depth"     : 32,'
                            . '                       *' . "\n"
-                       . '#        "keyboard_grab"    : true,'
+                       . '#         "keyboard_grab"    : true,'
                            . '                     *' . "\n"
-                       . '#        "share_clipboard"  : true,'
+                       . '#         "share_clipboard"  : true,'
                            . '                     *' . "\n"
-                       . '#        "experience_level" : 80,'
-                           . '                       *' . "\n"
-                       . '#        "share"            : null,'
+                       . '#         "disk_shares"      : null,'
                            . '                     *' . "\n"
-                       . '#        "compress"         : true'
+                       . '#         "sound"            : false,'
+                           . '                    *' . "\n"
+                       . '#         "microphone"       : false,'
+                           . '                    *' . "\n"
+                       . '#         "compress"         : true,'
+                           . '                     *' . "\n"
+                       . '#         "ignore_certs"     : false,'
+                           . '                    *' . "\n"
+                       . '#         "smooth_fonts"     : true,'
+                           . '                     *' . "\n"
+                       . '#         "compositor"       : true,'
+                           . '                     *' . "\n"
+                       . '#         "window_drag"      : true,'
+                           . '                     *' . "\n"
+                       . '#         "menu_animations"  : true,'
+                           . '                     *' . "\n"
+                       . '#         "themes"           : true,'
+                           . '                     *' . "\n"
+                       . '#         "wallpaper"        : true'
                            . '                      *' . "\n"
                        . "#     }\n"
                        . "# or:\n"
                        . "#     {\n"
-                       . '#        "name"             : "My Development '
+                       . '#         "name"             : "My Development '
                            . 'Desktop",' . "\n"
-                       . '#        "type"             : "vnc",' . "\n"
-                       . '#        "machine"          : "linux-dev",' . "\n"
-                       . '#        "port"             : 1,'
+                       . '#         "type"             : "vnc",' . "\n"
+                       . '#         "machine"          : "linux-dev",' . "\n"
+                       . '#         "port"             : 1,'
                            . '                        *' . "\n"
-                       . '#        "profile"          : "default",'
-                           . '                *' . "\n"
+                       . '#         "profile"          : "default"'
+                           . '                 *' . "\n"
                        . "#     }\n"
                        . "# or:\n"
                        . "#     {\n"
-                       . '#        "name"             : "My Development '
+                       . '#         "name"             : "My Development '
                            . 'Desktop",' . "\n"
-                       . '#        "type"             : "ssh",' . "\n"
-                       . '#        "machine"          : "linux-dev",' . "\n"
-                       . '#        "port"             : 22,'
+                       . '#         "type"             : "ssh",' . "\n"
+                       . '#         "machine"          : "linux-dev",' . "\n"
+                       . '#         "port"             : 22,'
                            . '                       *' . "\n"
-                       . '#        "user_name"        : "fblogs",' . "\n"
-                       . '#        "keep_alive        : false,'
+                       . '#         "user_name"        : "fblogs",' . "\n"
+                       . '#         "keep_alive"       : false,'
                            . '                    *' . "\n"
-                       . '#        "x11_tunnel        : false'
+                       . '#         "x11_tunnel"       : false'
                            . '                     *' . "\n"
                        . "#     }\n"
                        . "# or:\n"
                        . "#     {}\n"
                        . "# for a basic separator and lastly:\n"
                        . "#     {\n"
-                       . '#        "name"             : "My Machines",' . "\n"
-                       . '#        "type"             : "title",' . "\n"
-                       . '#        "separator         : false'
+                       . '#         "name"             : "My Machines",' . "\n"
+                       . '#         "type"             : "title",' . "\n"
+                       . '#         "separator"        : false'
                            . '                     *' . "\n"
                        . "#     }\n"
                        . "# for a titled separator.\n"
