@@ -81,6 +81,17 @@ use constant TOOLBARS_TOTAL_HEIGHT => 25;
 
 use constant USER_SETTINGS_FILE => "connection-managerrc";
 
+# Details of what applications to use.
+
+my $applications;
+
+# REs for matching SSH command and window title tokens.
+
+my $ssh_cmd_args_token_re = qr/\{ssh-command-args\}/;
+my $ssh_cmd_token_re = qr/\{ssh-command\}/;
+my $ssh_cmd_tokens_re = qr/\{(?:ssh-command|ssh-command-args)\}/;
+my $window_title_token_re = qr/\{title\}/;
+
 # ***** FUNCTIONAL PROTOTYPES *****
 
 # Private routines.
@@ -88,7 +99,7 @@ use constant USER_SETTINGS_FILE => "connection-managerrc";
 sub create_menu($);
 sub create_password_dialog($$);
 sub create_rdp_connection_dialog($);
-sub load_settings();
+sub load_settings($$);
 sub handle_rdp_menu_entry($);
 sub rdp_menu_entry_cb($$);
 sub run_command(@);
@@ -124,23 +135,7 @@ sub vnc_path();
 
     # Load the user's settings to get the list of sessions.
 
-    if (not defined($sessions = load_settings()))
-    {
-        my $dialog;
-        my $err = $!;
-        $dialog = Gtk2::MessageDialog->new_with_markup
-            (undef,
-             ["modal"],
-             "error",
-             "close",
-             __x("Your preferences could not be loaded, the reason given was:\n"
-                     . "<b><i>{error_message}</i></b>",
-                 error_message => Glib::Markup::escape_text($err)));
-        $dialog->set_position("center-always");
-        $dialog->run();
-        $dialog->destroy();
-        exit(1);
-    }
+    exit(1) unless (load_settings(\$sessions, \$applications));
 
     # Check command line arguments for RDP helper invocation.
 
@@ -173,6 +168,7 @@ sub vnc_path();
                  __("Internal error: Invalid --rdp argument."));
             $dialog->set_position("center-always");
             $dialog->run();
+            $dialog->destroy();
             $exit_code = 1;
         }
 
@@ -221,7 +217,7 @@ sub vnc_path();
                  if ($event->button() == 1 or $event->button() == 3)
                  {
                      if (settings_file_has_changed()
-                         and defined($sessions = load_settings()))
+                         and load_settings(\$sessions, \$applications))
                      {
                          $menu->destroy();
                          $menu = create_menu($sessions);
@@ -370,21 +366,46 @@ sub ssh_menu_entry_cb($$)
 
     my ($widget, $details) = @_;
 
-    my @args;
+    my (@args,
+        @ssh_cmd);
 
-    # Sort out the command and its arguments.
+    # Build up the SSH command.
 
-    @args = ("konsole",
-             "-p", "RemoteTabTitleFormat=" . sprintf("%s\@%s",
-                                                     $details->{user_name},
-                                                     $details->{machine})
-                 . ($details->{x11_tunnel} ?  " (X11)" : ""),
-             "-e", "ssh");
-    push(@args, "-Y") if ($details->{x11_tunnel});
-    push(@args, "-p", $details->{port}) if (defined($details->{port}));
-    push(@args, "-o", "ServerAliveInterval=60")
+    push(@ssh_cmd, "ssh");
+    push(@ssh_cmd, "-Y") if ($details->{x11_tunnel});
+    push(@ssh_cmd, "-p", $details->{port}) if (defined($details->{port}));
+    push(@ssh_cmd, "-o", "ServerAliveInterval=60")
         if (defined($details->{keep_alive}));
-    push(@args, sprintf("%s\@%s", $details->{user_name}, $details->{machine}));
+    push(@ssh_cmd, sprintf("%s\@%s",
+                           $details->{user_name},
+                           $details->{machine}));
+
+    # Sort out the terminal command and its arguments.
+
+    foreach my $arg (@{$applications->{terminal}})
+    {
+        if ($arg =~ m/$ssh_cmd_token_re/)
+        {
+            my $ssh_cmd = join(" ", @ssh_cmd);
+            push(@args, $arg =~ s/$ssh_cmd_token_re/$ssh_cmd/gr);
+        }
+        elsif ($arg =~ m/$ssh_cmd_args_token_re/)
+        {
+            push(@args, @ssh_cmd);
+        }
+        elsif ($arg =~ m/$window_title_token_re/)
+        {
+            my $title = sprintf("%s\@%s",
+                                $details->{user_name},
+                                $details->{machine})
+                . ($details->{x11_tunnel} ?  " (X11)" : "");
+            push(@args, $arg =~ s/$window_title_token_re/$title/gr);
+        }
+        else
+        {
+            push(@args, $arg);
+        }
+    }
 
     # Run the command, konsole backgrounds itself.
 
@@ -942,8 +963,8 @@ sub title_event_cb($$)
 #
 #   Routine      - run_command
 #
-#   Description  - Simply runs the specifid command in a subprocess, returning
-#                  straight away.
+#   Description  - Simply runs the specified command in a subprocess,
+#                  returning straight away.
 #
 #   Data         - @cmd : The command that is to be run. This can be in the
 #                         form of either a single string containing the
@@ -1021,17 +1042,25 @@ sub run_command(@)
 #   Description  - Loads in the users settings file that contains all the
 #                  sessions that are to be managed.
 #
-#   Data         - Return Value : A reference to a list of sessions on
-#                                 success, otherwise undef on failure.
+#   Data         - $sessions     : A reference to a scalar that is to contain
+#                                  a reference to the list of session records.
+#                  $applications : A reference to a scalar that is to contain
+#                                  a reference to the list of helper
+#                                  applications.
+#                  Return Value  : True on success, otherwise false on
+#                                  failure.
 #
 ##############################################################################
 
 
 
-sub load_settings()
+sub load_settings($$)
 {
 
-    my $list;
+    my ($sessions, $applications) = @_;
+
+    my (%apps,
+        $list);
     my $fname = settings_file_name();
 
     # Attempt to open the settings file, if it doesn't exist then create it.
@@ -1042,14 +1071,46 @@ sub load_settings()
         if (defined($fh = IO::File->new($fname, "r")))
         {
 
-            my ($err_msg,
-                $line);
+            my $have_command_entry;
             my $data = "";
+            my $user_name = ($ENV{LOGNAME} or $ENV{USERNAME} or $ENV{USER});
+            my %defaults =
+                ("title"    => {separator => undef},
+                 "rdp"      => {port            => undef,
+                                user_name       => $user_name,
+                                domain_name     => undef,
+                                window_mode     => "maximised-no-boarders",
+                                colour_depth    => 32,
+                                keyboard_grab   => 1,
+                                share_clipboard => 1,
+                                disk_shares     => undef,
+                                sound           => undef,
+                                microphone      => undef,
+                                compress        => 1,
+                                ignore_certs    => undef,
+                                smooth_fonts    => 1,
+                                compositor      => 1,
+                                window_drag     => 1,
+                                menu_animations => 1,
+                                themes          => 1,
+                                wallpaper       => 1},
+                 "vnc"      => {port    => 1,
+                                profile => "default"},
+                 "ssh"      => {port       => undef,
+                                user_name  => $user_name,
+                                keep_alive => undef,
+                                x11_tunnel => undef},
+                 "commands" => {terminal => ["konsole",
+                                             "-p",
+                                             "RemoteTabTitleFormat={title}",
+                                             "-e",
+                                             "{ssh-command-args}"]});
             my $json = JSON->new->utf8();
 
-            # Read in the JSON user settings.
+            # Read in the JSON user settings, stripping out comments (which
+            # aren't allowed in JSON).
 
-            while ($line = $fh->getline())
+            while (my $line = $fh->getline())
             {
                 if ($line !~ m/^\s*#/)
                 {
@@ -1099,55 +1160,77 @@ sub load_settings()
 
             foreach my $entry (@$list)
             {
-                my %defaults;
-                my $user_name = ($ENV{LOGNAME} or $ENV{USERNAME} or $ENV{USER});
                 if (scalar(keys(%$entry)) > 0)
                 {
-                    if ($entry->{type} eq "title")
+                    if (not exists($defaults{$entry->{type}}))
                     {
-                        %defaults = (separator => undef);
+                        my $dialog;
+                        $dialog = Gtk2::MessageDialog->new_with_markup
+                            (undef,
+                             ["modal"],
+                             "warning",
+                             "close",
+                             __x("You have an unknown entry with a type of\n"
+                                     . "`{type}'. This has been ignored.",
+                                 type => Glib::Markup::escape_text
+                                             ($entry->{type})));
+                        $dialog->set_position("center-always");
+                        $dialog->run();
+                        $dialog->destroy();
+                        next;
                     }
-                    elsif ($entry->{type} eq "rdp")
-                    {
-                        %defaults = (port            => undef,
-                                     user_name       => $user_name,
-                                     domain_name     => undef,
-                                     window_mode     => "maximised-no-boarders",
-                                     colour_depth    => 32,
-                                     keyboard_grab   => 1,
-                                     share_clipboard => 1,
-                                     disk_shares     => undef,
-                                     sound           => undef,
-                                     microphone      => undef,
-                                     compress        => 1,
-                                     ignore_certs    => undef,
-                                     smooth_fonts    => 1,
-                                     compositor      => 1,
-                                     window_drag     => 1,
-                                     menu_animations => 1,
-                                     themes          => 1,
-                                     wallpaper       => 1);
-                    }
-                    elsif ($entry->{type} eq "vnc")
-                    {
-                        %defaults = (port    => 1,
-                                     profile => "default");
-                    }
-                    elsif ($entry->{type} eq "ssh")
-                    {
-                        %defaults = (port       => undef,
-                                     user_name  => $user_name,
-                                     keep_alive => undef,
-                                     x11_tunnel => undef);
-                    }
-                    while (my ($key, $value) = each(%defaults))
+                    while (my ($key, $value) =
+                           each(%{$defaults{$entry->{type}}}))
                     {
                         if (not exists($entry->{$key}))
                         {
                             $entry->{$key} = $value;
                         }
                     }
+                    if ($entry->{type} eq "commands")
+                    {
+                        if (exists($entry->{terminal}))
+                        {
+                            my $found_cmd;
+                            foreach my $arg (@{$entry->{terminal}})
+                            {
+                                if ($arg =~ m/$ssh_cmd_tokens_re/)
+                                {
+                                    $found_cmd = 1;
+                                    last;
+                                }
+                            }
+                            if (not $found_cmd)
+                            {
+                                my $dialog;
+                                $dialog = Gtk2::MessageDialog->new
+                                    (undef,
+                                     ["modal"],
+                                     "warning",
+                                     "close",
+                                     __("Your terminal entry contains no "
+                                        . "reference\nto `{ssh-command}' nor "
+                                        . "`{ssh-command-args}'.\nReverting to "
+                                        . "the default setting."));
+                                $dialog->set_position("center-always");
+                                $dialog->run();
+                                $dialog->destroy();
+                                $entry->{terminal} =
+                                    $defaults{"commands"}->{terminal};
+                            }
+                        }
+                        $have_command_entry = 1;
+                    }
                 }
+            }
+
+            # Make sure that we have a default commands entry if none was
+            # specified.
+
+            if (not $have_command_entry)
+            {
+                push(@$list, {type     => "commands",
+                              terminal => $defaults{"commands"}->{terminal}});
             }
 
         }
@@ -1160,6 +1243,20 @@ sub load_settings()
             $fh->print("# A fully qualified entry is (defaults are shown with "
                            . "*):\n"
                        . "# [\n"
+                       . "# Specify the terminal application to use (tokens "
+                       . "{ssh-command},\n"
+                       . "# {ssh-command-args} and {title} are supported):\n"
+                       . "#     {\n"
+                       . '#         "type"             : "commands",' . "\n"
+                       . '#         "terminal"         : ["konsole",' . "\n"
+                       . '#                               "-p",' . "\n"
+                       . '#                               "RemoteTabTitleFormat'
+                       . '={title}",' . "\n"
+                       . '#                               "-e",' . "\n"
+                       . '#                               "{ssh-command-args}"]'
+                       . '    *' . "\n"
+                       . "#     }\n"
+                       . "# and then:\n"
                        . "#     {\n"
                        . '#         "name"             : "My Development '
                            . 'Desktop",' . "\n"
@@ -1243,7 +1340,25 @@ sub load_settings()
         }
     }
 
-    return $list;
+    # Update the applications list and then strip out those entries from the
+    # sessions list.
+
+    for my $entry (@$list)
+    {
+        if ($entry->{type} eq "commands")
+        {
+            while (my ($key, $value) = each(%$entry))
+            {
+                $apps{$key} = $value if ($key ne "type");
+            }
+        }
+    }
+    @$list = grep($_->{type} ne "commands", @$list);
+
+    $$sessions = $list;
+    $$applications = \%apps;
+
+    return 1;
 
 }
 #
