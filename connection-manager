@@ -511,7 +511,8 @@ sub handle_rdp_menu_entry($)
         {
 
             my (@args,
-                $cmd_handle);
+                $cmd_handle,
+                $hard_close);
 
             # Sort out the command and its arguments.
 
@@ -551,7 +552,7 @@ sub handle_rdp_menu_entry($)
             push(@args, "/sound") if ($details->{sound});
             push(@args, "/microphone") if ($details->{microphone});
             push(@args, ($details->{compress} ? "+" : "-") . "compression");
-            push(@args, "-cert-ignore") if ($details->{ignore_certs});
+            push(@args, "/cert:ignore") if ($details->{ignore_certs});
             push(@args, ($details->{smooth_fonts} ? "+" : "-") . "fonts");
             push(@args, ($details->{compositor} ? "+" : "-") . "aero");
             push(@args, ($details->{window_drag} ? "+" : "-") . "window-drag");
@@ -595,9 +596,16 @@ sub handle_rdp_menu_entry($)
                                            . "if this is expected,\n"
                                        . "otherwise something nasty has "
                                            . "happened!");
+
+                                # This may not close as xfreerdp in some
+                                # versions then goes on to prompt for whether
+                                # the new certificate should be accepted. We
+                                # don't want this so force it to stop.
+
+                                $hard_close = 1;
                                 return;
                             }],
-                       [qr/STATUS_LOGON_FAILURE/ =>
+                       [qr/ERRCONNECT_AUTHENTICATION_FAILED/ =>
                             sub
                             {
                                 $warning_msg = __("Incorrect password.");
@@ -617,7 +625,14 @@ sub handle_rdp_menu_entry($)
                                                   . "or unreachable.");
                                 return;
                             }]);
-            $cmd_handle->soft_close();
+            if ($hard_close)
+            {
+                $cmd_handle->hard_close();
+            }
+            else
+            {
+                $cmd_handle->soft_close();
+            }
 
         }
 
