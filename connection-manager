@@ -204,8 +204,8 @@ sub vnc_path();
 
         # Create the system tray icon widget.
 
-        $tray_icon=
-            Gtk3::StatusIcon->new_from_icon_name("video-display");
+        $tray_icon =
+            Gtk3::StatusIcon->new_from_icon_name("preferences-system-login");
         $tray_icon->set_title(__("Connection Manager"));
 
         # Create the menus.
