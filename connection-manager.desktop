@@ -1,0 +1,11 @@
+[Desktop Entry]
+Comment=Manage RDP, VNC and SSH login sessions from the system tray
+Exec=connection-manager
+GenericName=Manage Login Sessions
+Icon=preferences-system-login
+Name=Connection Manager
+NoDisplay=false
+StartupNotify=true
+Terminal=false
+Type=Application
+Categories=Internet;Network;Intranet;
