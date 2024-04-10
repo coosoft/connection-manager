@@ -559,6 +559,8 @@ sub handle_rdp_menu_entry($)
                  ($details->{menu_animations} ? "+" : "-") . "menu-anims");
             push(@args, ($details->{themes} ? "+" : "-") . "themes");
             push(@args, ($details->{wallpaper} ? "+" : "-") . "wallpaper");
+            push(@args, "/tls-seclevel:" . $details->{tls_security_level})
+                if ($details->{tls_security_level} ne 1);
 
             # Now run it via Expect so we can feed in the password and watch for
             # errors.
@@ -1119,24 +1121,25 @@ sub load_settings($$)
             my $user_name = ($ENV{LOGNAME} or $ENV{USERNAME} or $ENV{USER});
             my %defaults =
                 ("title"    => {separator => undef},
-                 "rdp"      => {port            => undef,
-                                user_name       => $user_name,
-                                domain_name     => undef,
-                                window_mode     => "maximised-no-boarders",
-                                colour_depth    => 32,
-                                keyboard_grab   => 1,
-                                share_clipboard => 1,
-                                disk_shares     => undef,
-                                sound           => undef,
-                                microphone      => undef,
-                                compress        => 1,
-                                ignore_certs    => undef,
-                                smooth_fonts    => 1,
-                                compositor      => 1,
-                                window_drag     => 1,
-                                menu_animations => 1,
-                                themes          => 1,
-                                wallpaper       => 1},
+                 "rdp"      => {port               => undef,
+                                user_name          => $user_name,
+                                domain_name        => undef,
+                                window_mode        => "maximised-no-boarders",
+                                colour_depth       => 32,
+                                keyboard_grab      => 1,
+                                share_clipboard    => 1,
+                                disk_shares        => undef,
+                                sound              => undef,
+                                microphone         => undef,
+                                compress           => 1,
+                                ignore_certs       => undef,
+                                smooth_fonts       => 1,
+                                compositor         => 1,
+                                window_drag        => 1,
+                                menu_animations    => 1,
+                                themes             => 1,
+                                wallpaper          => 1,
+                                tls_security_level => 1},
                  "vnc"      => {port    => 1,
                                 profile => "default"},
                  "ssh"      => {port       => undef,
@@ -1290,89 +1293,92 @@ sub load_settings($$)
                        . "{ssh-command},\n"
                        . "# {ssh-command-args} and {title} are supported):\n"
                        . "#     {\n"
-                       . '#         "type"             : "commands",' . "\n"
-                       . '#         "terminal"         : ["konsole",' . "\n"
-                       . '#                               "-p",' . "\n"
-                       . '#                               "RemoteTabTitleFormat'
-                       . '={title}",' . "\n"
-                       . '#                               "-e",' . "\n"
-                       . '#                               "{ssh-command-args}"]'
-                       . '    *' . "\n"
+                       . '#         "type"               : "commands",' . "\n"
+                       . '#         "terminal"           : ["konsole",' . "\n"
+                       . '#                                 "-p",' . "\n"
+                       . '#                                 '
+                           . '"RemoteTabTitleFormat={title}",' . "\n"
+                       . '#                                 "-e",' . "\n"
+                       . '#                                 '
+                           . '"{ssh-command-args}"]    *' . "\n"
                        . "#     }\n"
                        . "# and then:\n"
                        . "#     {\n"
-                       . '#         "name"             : "My Development '
+                       . '#         "name"               : "My Development '
                            . 'Desktop",' . "\n"
-                       . '#         "type"             : "rdp",' . "\n"
-                       . '#         "machine"          : "linux-dev",' . "\n"
-                       . '#         "port"             : 3389,'
+                       . '#         "type"               : "rdp",' . "\n"
+                       . '#         "machine"            : "linux-dev",' . "\n"
+                       . '#         "port"               : 3389,'
                            . '                     *' . "\n"
-                       . '#         "user_name"        : "fblogs",' . "\n"
-                       . '#         "domain_name"      : null,'
+                       . '#         "user_name"          : "fblogs",' . "\n"
+                       . '#         "domain_name"        : null,'
                            . '                     *' . "\n"
-                       . '#         "window_mode"      : '
+                       . '#         "window_mode"        : '
                            . '"maximised-no-boarders",  *' . "\n"
-                       . '#         "colour_depth"     : 32,'
+                       . '#         "colour_depth"       : 32,'
                            . '                       *' . "\n"
-                       . '#         "keyboard_grab"    : true,'
+                       . '#         "keyboard_grab"      : true,'
                            . '                     *' . "\n"
-                       . '#         "share_clipboard"  : true,'
+                       . '#         "share_clipboard"    : true,'
                            . '                     *' . "\n"
-                       . '#         "disk_shares"      : null,'
+                       . '#         "disk_shares"        : null,'
                            . '                     *' . "\n"
-                       . '#         "sound"            : false,'
+                       . '#         "sound"              : false,'
                            . '                    *' . "\n"
-                       . '#         "microphone"       : false,'
+                       . '#         "microphone"         : false,'
                            . '                    *' . "\n"
-                       . '#         "compress"         : true,'
+                       . '#         "compress"           : true,'
                            . '                     *' . "\n"
-                       . '#         "ignore_certs"     : false,'
+                       . '#         "ignore_certs"       : false,'
                            . '                    *' . "\n"
-                       . '#         "smooth_fonts"     : true,'
+                       . '#         "smooth_fonts"       : true,'
                            . '                     *' . "\n"
-                       . '#         "compositor"       : true,'
+                       . '#         "compositor"         : true,'
                            . '                     *' . "\n"
-                       . '#         "window_drag"      : true,'
+                       . '#         "window_drag"        : true,'
                            . '                     *' . "\n"
-                       . '#         "menu_animations"  : true,'
+                       . '#         "menu_animations"    : true,'
                            . '                     *' . "\n"
-                       . '#         "themes"           : true,'
+                       . '#         "themes"             : true,'
                            . '                     *' . "\n"
-                       . '#         "wallpaper"        : true'
+                       . '#         "wallpaper"          : true,'
+                           . '                     *' . "\n"
+                       . '#         "tls_security_level" : 1'
                            . '                      *' . "\n"
                        . "#     }\n"
                        . "# or:\n"
                        . "#     {\n"
-                       . '#         "name"             : "My Development '
+                       . '#         "name"               : "My Development '
                            . 'Desktop",' . "\n"
-                       . '#         "type"             : "vnc",' . "\n"
-                       . '#         "machine"          : "linux-dev",' . "\n"
-                       . '#         "port"             : 1,'
+                       . '#         "type"               : "vnc",' . "\n"
+                       . '#         "machine"            : "linux-dev",' . "\n"
+                       . '#         "port"               : 1,'
                            . '                        *' . "\n"
-                       . '#         "profile"          : "default"'
+                       . '#         "profile"            : "default"'
                            . '                 *' . "\n"
                        . "#     }\n"
                        . "# or:\n"
                        . "#     {\n"
-                       . '#         "name"             : "My Development '
+                       . '#         "name"               : "My Development '
                            . 'Desktop",' . "\n"
-                       . '#         "type"             : "ssh",' . "\n"
-                       . '#         "machine"          : "linux-dev",' . "\n"
-                       . '#         "port"             : 22,'
+                       . '#         "type"               : "ssh",' . "\n"
+                       . '#         "machine"            : "linux-dev",' . "\n"
+                       . '#         "port"               : 22,'
                            . '                       *' . "\n"
-                       . '#         "user_name"        : "fblogs",' . "\n"
-                       . '#         "keep_alive"       : false,'
+                       . '#         "user_name"          : "fblogs",' . "\n"
+                       . '#         "keep_alive"         : false,'
                            . '                    *' . "\n"
-                       . '#         "x11_tunnel"       : false'
+                       . '#         "x11_tunnel"         : false'
                            . '                     *' . "\n"
                        . "#     }\n"
                        . "# or:\n"
                        . "#     {}\n"
                        . "# for a basic separator and lastly:\n"
                        . "#     {\n"
-                       . '#         "name"             : "My Machines",' . "\n"
-                       . '#         "type"             : "title",' . "\n"
-                       . '#         "separator"        : false'
+                       . '#         "name"               : "My Machines",'
+                           . "\n"
+                       . '#         "type"               : "title",' . "\n"
+                       . '#         "separator"          : false'
                            . '                     *' . "\n"
                        . "#     }\n"
                        . "# for a titled separator.\n"
