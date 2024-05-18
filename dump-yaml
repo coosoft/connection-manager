@@ -1,0 +1,13 @@
+#!/usr/bin/perl
+
+require 5.0.12000;
+
+use strict;
+use warnings;
+
+use Data::Dumper;
+use YAML::XS;
+
+print(Dumper(YAML::XS::LoadFile($ARGV[0])));
+
+exit(0);
