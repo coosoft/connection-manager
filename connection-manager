@@ -42,7 +42,7 @@
 
 require 5.012000;
 
-use feature "state";
+use feature qw(state);
 use strict;
 use warnings;
 
@@ -50,9 +50,11 @@ use warnings;
 
 # Standard Perl and CPAN modules.
 
+use Data::Dumper;
 use Encode;
 use English;
 use Expect;
+use File::Basename;
 use File::Spec;
 use Glib qw(FALSE TRUE);
 use Gtk3 -init;
@@ -60,36 +62,202 @@ use IO::File;
 use JSON;
 use Locale::TextDomain ("connection-manager");
 use POSIX qw(:sys_wait_h _exit);
+use YAML::XS;
 
 # Modules specific to this application.
 
+use Data::SyntaxChecker qw(:syntax_elements :common_routines);
+use Logger qw(:log_levels :common_routines);
+
 # ***** GLOBAL DATA DECLARATIONS *****
 
-# Constants for the assorted RDP experience levels.
+# Constant for the name of the user's settings file.
 
-use constant EXPERIENCE_MODEM     => 15;
-use constant EXPERIENCE_BROADBAND => 1;
-use constant EXPERIENCE_GOOD      => 80;
-use constant EXPERIENCE_BEST      => 180;
+use constant USER_SETTINGS_FILE => "connection-manager.yml";
 
-# Constant for the height of all desktop toolbars.
+# The general settings for the application.
 
-use constant TOOLBARS_TOTAL_HEIGHT => 25;
+my $settings;
 
-# Constant for the namme of the user's settings file.
+# RE for matching YAML truth values.
 
-use constant USER_SETTINGS_FILE => "connection-managerrc";
+my $boolean_true_re = qr/^(?:true|yes|on|1)$/i;
 
-# Details of what applications to use.
+# REs for matching file name, SSH command and window title tokens.
 
-my $applications;
-
-# REs for matching SSH command and window title tokens.
-
-my $ssh_cmd_args_token_re = qr/\{ssh-command-args\}/;
+my $file_name_token_re = qr/^\{file-name\}$/;
+my $ssh_cmd_args_token_re = qr/^\{ssh-command-args\}$/;
 my $ssh_cmd_token_re = qr/\{ssh-command\}/;
 my $ssh_cmd_tokens_re = qr/\{(?:ssh-command|ssh-command-args)\}/;
 my $window_title_token_re = qr/\{title\}/;
+
+my %settings_syntax_tree =
+    ('m:config_version' => SYNTAX_FLOAT,
+     's:settings'       =>
+         {'s:terminal'              => ['r:.+'],
+          's:editor'                => ['r:.+'],
+          's:tigervnc_profile_path' => SYNTAX_PATH,
+          's:screen_size'           => 'r:^[0-9]+x[0-9]+$',
+          's:usable_desktop_size'   => 'r:^[0-9]+x[0-9]+$',
+          's:debug'                 => SYNTAX_BOOLEAN},
+     'm:menu'           =>
+         [{'m:separator' =>
+               {'s:text'      => SYNTAX_PRINTABLE,
+                's:draw_line' => SYNTAX_BOOLEAN}},
+          {'m:rdp'       =>
+               {'m:name'               => SYNTAX_PRINTABLE,
+                'm:machine'            => SYNTAX_MACHINE,
+                's:port'               => SYNTAX_NATURAL,
+                's:user'               => SYNTAX_USER_NAME,
+                's:domain_name'        => SYNTAX_HOSTNAME,
+                's:window_mode'        => 'r:^(?:fullscreen'
+                                              . '|maximised-no-boarders)'
+                                              . '|(?:\d+x\d+)$',
+                's:colour_depth'       => 'r:^8|18|24|32$',
+                's:compression_level'  => 'r:^(?:0|1|2)$',
+                's:disk_shares'        => 'r:^[^ ,;]+,[^,;]+(?:;[^ ,;]+,'
+                                              . '[^,;]+)*$',
+                's:network'            => 'r:^(?:|auto'
+                                              . '|broadband'
+                                              . '|broadband-high'
+                                              . '|broadband-low'
+                                              . '|lan'
+                                              . '|modem'
+                                              . '|wan)$',
+                's:tls_security_level' => SYNTAX_FLOAT,
+                's:admin'              => SYNTAX_BOOLEAN,
+                's:bitmap_cache'       => SYNTAX_BOOLEAN,
+                's:compositor'         => SYNTAX_BOOLEAN,
+                's:compress'           => SYNTAX_BOOLEAN,
+                's:home_drive'         => SYNTAX_BOOLEAN,
+                's:ignore_certs'       => SYNTAX_BOOLEAN,
+                's:keyboard_grab'      => SYNTAX_BOOLEAN,
+                's:menu_animations'    => SYNTAX_BOOLEAN,
+                's:microphone'         => SYNTAX_BOOLEAN,
+                's:share_clipboard'    => SYNTAX_BOOLEAN,
+                's:smooth_fonts'       => SYNTAX_BOOLEAN,
+                's:sound'              => SYNTAX_BOOLEAN,
+                's:themes'             => SYNTAX_BOOLEAN,
+                's:toolbar'            => SYNTAX_BOOLEAN,
+                's:window_drag'        => SYNTAX_BOOLEAN,
+                's:wallpaper'          => SYNTAX_BOOLEAN}},
+          {'m:vnc'       =>
+               {'m:name'               => SYNTAX_PRINTABLE,
+                'm:machine'            => SYNTAX_MACHINE,
+                's:port'               => SYNTAX_NATURAL,
+                's:profile'            => 'r:^[^/]+$'}},
+          {'m:ssh'       =>
+               {'m:name'               => SYNTAX_PRINTABLE,
+                'm:machine'            => SYNTAX_MACHINE,
+                's:port'               => SYNTAX_NATURAL,
+                's:user'               => SYNTAX_USER_NAME,
+                's:keep_alive'         => SYNTAX_BOOLEAN,
+                's:x11_tunnel'         => SYNTAX_BOOLEAN}},
+          {'m:menu'      =>
+               {'m:name'               => SYNTAX_PRINTABLE,
+                'm:items'              => undef}}]);
+
+my $setting_header = <<EOF;
+# Notes:
+# - Defaults are shown with *.
+# - One can use the following tokens when specifying a terminal application:
+#   - `{ssh-command}'      : Expands to a single string containing the complete
+#                            ssh command.
+#   - `{ssh-command-args}' : Expands to a list of strings, one for each argument
+#                            of the ssh command. This token only works as a
+#                            dedicated entry in a list of strings (i.e.
+#                            "freddy{ssh-command-args}" won't be recognised).
+#   - `{title}'            : Expands to contain one string, containing a
+#                            meaningful title for a terminal window.
+#   One of the ssh tokens must be supplied for the terminal entry to be valid.
+# - One can use the following tokens when specifying a text editor application:
+#   - `{file-name}' : Expands to a single string containing the name of the file
+#                     that is to be edited.
+# - In the examples below some default values are calculated at runtime. For
+#   example, default desktop sizes and user names. Some meanings:
+#   - `<Not Specified>' : No option is specified to the supporting application
+#                         and so its own default applies.
+#   - `option1|option2' : Details the options that can be used for that setting.
+#
+# config_version: 1.0
+# settings:
+#   terminal: ["konsole",                         *
+#              "-p",
+#              "RemoteTabTitleFormat={title}",
+#              "-e",
+#              "{ssh-command-args}"]
+#   editor: ["vim", "{file-name}"                 *
+#   tigervnc_profile_path: ~/.vnc                 *
+#   screen_size: 1920x1200                        *
+#   usable_desktop_size: 1920x1175                *
+#   debug: false                                  *
+#
+# menu:
+#   - separator:
+#       text: null                                *
+#       draw_line: false                          * # True if no `text'.
+#   - rdp-defaults:
+#       # This contains the entries as listed under normal RDP entries, apart
+#       # from `name' and `machine', but instead specifies default values to be
+#       # used for those other entries. Please note, if you use this entry type
+#       # then it has to be defined at the top level.
+#   - rdp:
+#       name:
+#       machine:
+#       port: 3389                                *
+#       user: <Your User Name>                    *
+#       domain_name: <Not Specified>              *
+#       window_mode: maximised-no-boarders        *
+#                    fullscreen|maximised-no-boarders|<Width>x<Height>
+#       colour_depth: 32                          *
+#       compression_level: <Not Specified>        *
+#       disk_shares: <Not Specified>              *
+#       network: <Not Specified>                  *
+#                auto|broadband|broadband-high|broadband-low|lan|modem|wan
+#       tls_security_level: <Not Specified>       *
+#       admin: false                              *
+#       bitmap_cache: false                       *
+#       compositor: true                          *
+#       compress: true                            *
+#       home_drive: false                         *
+#       ignore_certs: false                       *
+#       keyboard_grab: true                       *
+#       menu_animations: true                     *
+#       microphone: false                         *
+#       share_clipboard: true                     *
+#       smooth_fonts: true                        *
+#       sound: false                              *
+#       themes: true                              *
+#       toolbar: false                            *
+#       wallpaper: true                           *
+#       window_drag: true                         *
+#   - vnc:
+#       name: Linux Desktop
+#       machine: linux-dev.work.org
+#       port: 1                                   * # VNC port not socket.
+#       profile: default                          * # Name of TigerVNC profile.
+#   - ssh:
+#       name: Linux Desktop
+#       machine: linux-dev.work.org
+#       port: 22                                  *
+#       user: fblogs                              *
+#       keep_alive: false                         *
+#       x11_tunnel: false                         *
+#   - menu:
+#       name: Lab Virtual Machines
+#       items:
+#         - ssh:
+#             name: Play Pen
+#             machine: play.lab.home.org
+#             user: system
+#         - .
+#         - .
+#         - .
+config_version: 1.0
+menu:
+  - separator:
+      text: Empty - Please edit your prefereses
+EOF
 
 # ***** FUNCTIONAL PROTOTYPES *****
 
@@ -99,8 +267,10 @@ sub create_connections_menu($);
 sub create_options_menu($);
 sub create_password_dialog($$);
 sub create_rdp_connection_dialog($);
-sub load_settings($$);
+sub find_rdp_session_entry($$);
 sub handle_rdp_menu_entry($);
+sub load_settings($$);
+sub patch_up_syntax_table();
 sub rdp_menu_entry_cb($$);
 sub run_command(@);
 sub settings_file_has_changed();
@@ -109,6 +279,7 @@ sub ssh_menu_entry_cb($$);
 sub title_event_cb($$);
 sub vnc_menu_entry_cb($$);
 sub vnc_path();
+sub yaml_data_to_objects($;$$);
 #
 ##############################################################################
 #
@@ -127,45 +298,61 @@ sub vnc_path();
 
     my $sessions;
     my $exit_code = 0;
-    my $settings_file_name = settings_file_name();
+
+    # Register the program name with the logger.
+
+    Logger::register(program_name => basename($0));
 
     # Automatically reap zombie child processes.
 
     $SIG{CHLD} = "IGNORE";
 
+    # Patch up the syntax tree to cope with recursive menu definitions and
+    # duplicates.
+
+    patch_up_syntax_table();
+
+    # Prime the update checker.
+
+    settings_file_has_changed();
+
     # Load the user's settings to get the list of sessions.
 
-    if (not load_settings(\$sessions, \$applications))
+    if (not load_settings(\$sessions, \$settings))
     {
-        my $dialog;
-        my $err = $!;
-        $dialog = Gtk3::MessageDialog->new_with_markup
-            (undef,
-             ["modal"],
-             "error",
-             "close",
-             __x("Your preferences could not be loaded, the reason given was:\n"
-                     . "<b><i>{error_message}</i></b>",
-                 error_message => Glib::Markup::escape_text($err)));
-        $dialog->set_position("center-always");
-        $dialog->run();
-        $dialog->destroy();
+        if ($!)
+        {
+            my $dialog;
+            my $err = $!;
+            $dialog = Gtk3::MessageDialog->new_with_markup
+                (undef,
+                 ["modal"],
+                 "error",
+                 "close",
+                 __x("Your preferences could not be loaded, the reason given "
+                         . "was:\n<b><i>{error_message}</i></b>",
+                     error_message => Glib::Markup::escape_text($err)));
+            $dialog->set_position("center-always");
+            $dialog->run();
+            $dialog->destroy();
+        }
         exit(1);
     }
 
     # Check command line arguments for RDP helper invocation.
 
-    if (scalar(@ARGV) eq 2 and $ARGV[0] eq "--rdp" and $ARGV[1] =~ m/^\d+$/)
+    if (scalar(@ARGV) eq 2 and $ARGV[0] eq "--rdp" and $ARGV[1] =~ m/^-?\d+$/)
     {
 
-        # Run as an RDP helper subprocess.
+        # Find the RDP entry via its unique id and then run as an RDP helper
+        # subprocess.
 
-        if (keys(%{$sessions->[$ARGV[1]]}) > 0
-            and $sessions->[$ARGV[1]]->{type} eq "rdp")
+        my $rdp_session = find_rdp_session_entry($sessions, $ARGV[1]);
+        if (defined($rdp_session))
         {
             Glib::Idle->add
                 (sub {
-                     $exit_code = handle_rdp_menu_entry($sessions->[$ARGV[1]]);
+                     $exit_code = handle_rdp_menu_entry($rdp_session);
                      Gtk3->main_quit();
                      return FALSE;
                  });
@@ -198,10 +385,6 @@ sub vnc_path();
 
         # Run as a system tray utility.
 
-        # Prime the update checker.
-
-        settings_file_has_changed();
-
         # Create the system tray icon widget.
 
         $tray_icon =
@@ -219,14 +402,14 @@ sub vnc_path();
             ("button-release-event",
              sub {
                  my ($widget, $event) = @_;
+                 if (settings_file_has_changed()
+                     and load_settings(\$sessions, \$settings))
+                 {
+                     $connections_menu->destroy();
+                     $connections_menu = create_connections_menu($sessions);
+                 }
                  if ($event->button() == 1)
                  {
-                     if (settings_file_has_changed()
-                         and load_settings(\$sessions, \$applications))
-                     {
-                         $connections_menu->destroy();
-                         $connections_menu = create_connections_menu($sessions);
-                     }
                      $connections_menu->popup(undef,
                                               undef,
                                               undef,
@@ -268,9 +451,9 @@ sub vnc_path();
 #   Description  - Callback routine called when the user selects an RDP
 #                  connection menu entry.
 #
-#   Data         - $widget : The widget object that received the signal.
-#                  $index  : The index of the record containing the RDP
-#                            connection details.
+#   Data         - $widget  : The widget object that received the signal.
+#                  $id      : The id for the RDP session entry or -1 for the
+#                             generic blank RDP entry.
 #
 ##############################################################################
 
@@ -279,7 +462,7 @@ sub vnc_path();
 sub rdp_menu_entry_cb($$)
 {
 
-    my ($widget, $index) = @_;
+    my ($widget, $id) = @_;
 
     # We need to fork() and exec() this program as xfreerdp doesn't return and
     # we need to run Expect on it to securely pass in the password when
@@ -288,7 +471,7 @@ sub rdp_menu_entry_cb($$)
 
     if (fork() == 0)
     {
-        exec($PROGRAM_NAME, "--rdp", $index);
+        exec($PROGRAM_NAME, "--rdp", $id);
     }
 
 }
@@ -392,13 +575,11 @@ sub ssh_menu_entry_cb($$)
     push(@ssh_cmd, "-p", $details->{port}) if (defined($details->{port}));
     push(@ssh_cmd, "-o", "ServerAliveInterval=60")
         if (defined($details->{keep_alive}));
-    push(@ssh_cmd, sprintf("%s\@%s",
-                           $details->{user_name},
-                           $details->{machine}));
+    push(@ssh_cmd, sprintf("%s\@%s", $details->{user}, $details->{machine}));
 
     # Sort out the terminal command and its arguments.
 
-    foreach my $arg (@{$applications->{terminal}})
+    foreach my $arg (@{$settings->{terminal}})
     {
         if ($arg =~ m/$ssh_cmd_token_re/)
         {
@@ -411,9 +592,7 @@ sub ssh_menu_entry_cb($$)
         }
         elsif ($arg =~ m/$window_title_token_re/)
         {
-            my $title = sprintf("%s\@%s",
-                                $details->{user_name},
-                                $details->{machine})
+            my $title = sprintf("%s\@%s", $details->{user}, $details->{machine})
                 . ($details->{x11_tunnel} ?  " (X11)" : "");
             push(@args, $arg =~ s/$window_title_token_re/$title/gr);
         }
@@ -449,19 +628,17 @@ sub handle_rdp_menu_entry($)
 
     my $details = $_[0];
 
-    my ($dialog,
-        $desktop_height,
-        $desktop_width,
+    my ($err,
         $password,
-        $screen,
         $warning_msg);
+    my $output = "";
 
     # If we don't have any connection details then ask for them.
 
-    if (not defined($details->{machine}) or not defined($details->{user_name}))
+    if (not defined($details->{machine}) or not defined($details->{user}))
     {
         my $input;
-        $dialog = create_rdp_connection_dialog(\$input);
+        my $dialog = create_rdp_connection_dialog(\$input);
         $dialog->run();
         $dialog->destroy();
         while (Gtk3::events_pending())
@@ -472,9 +649,9 @@ sub handle_rdp_menu_entry($)
         {
             if ($input =~ m/^(?:([^\\]+)\\)?([^@]+)@([^:]+)(?::(\d+))?$/)
             {
-                my ($domain, $user_name, $machine, $port) = ($1, $2, $3, $4);
+                my ($domain, $user, $machine, $port) = ($1, $2, $3, $4);
                 $details->{domain} = $domain;
-                $details->{user_name} = $user_name;
+                $details->{user} = $user;
                 $details->{machine} = $machine;
                 $details->{port} = $port;
             }
@@ -488,15 +665,13 @@ sub handle_rdp_menu_entry($)
 
     # Only proceed if we are good to go.
 
-    if (not defined($warning_msg) and defined($details->{user_name}))
+    if (not defined($warning_msg)
+        and defined($details->{machine}) and defined($details->{user}))
     {
 
-        # Get the user's password and grab the desktop size at the same time.
+        # Get the user's password.
 
-        $dialog = create_password_dialog($details, \$password);
-        $screen = $dialog->get_screen();
-        $desktop_width = $screen->get_width();
-        $desktop_height = $screen->get_height();
+        my $dialog = create_password_dialog($details, \$password);
         $dialog->run();
         $dialog->destroy();
         while (Gtk3::events_pending())
@@ -510,17 +685,14 @@ sub handle_rdp_menu_entry($)
         if (defined($password))
         {
 
-            my (@args,
-                $cmd_handle,
-                $hard_close);
-
             # Sort out the command and its arguments.
 
+            my @args;
             push(@args, "xfreerdp");
             push(@args, "/v:" . $details->{machine});
             push(@args, "/port:" . $details->{port})
                 if (defined($details->{port}));
-            push(@args, "/u:" . $details->{user_name});
+            push(@args, "/u:" . $details->{user});
             push(@args, "/d:" . $details->{domain})
                 if (defined($details->{domain}));
             if ($details->{window_mode} eq "fullscreen")
@@ -536,10 +708,8 @@ sub handle_rdp_menu_entry($)
                 push(@args, "/size:" . $details->{window_mode});
             }
             push(@args, "/bpp:" . $details->{colour_depth});
-            push(@args,
-                 ($details->{keyboard_grab} ? "+" : "-") . "grab-keyboard");
-            push(@args,
-                 ($details->{share_clipboard} ? "+" : "-") . "clipboard");
+            push(@args, "/compression-level:" . $details->{compression_level})
+                if (defined($details->{compression_level}));
             if (defined($details->{disk_shares})
                 and $details->{disk_shares} =~
                     m/^[^ ,;]+,[^,;]+(?:;[^ ,;]+,[^,;]+)*$/)
@@ -549,27 +719,58 @@ sub handle_rdp_menu_entry($)
                     push(@args, "/drive:" . $entry);
                 }
             }
-            push(@args, "/sound") if ($details->{sound});
-            push(@args, "/microphone") if ($details->{microphone});
-            push(@args, ($details->{compress} ? "+" : "-") . "compression");
-            push(@args, "/cert:ignore") if ($details->{ignore_certs});
-            push(@args, ($details->{smooth_fonts} ? "+" : "-") . "fonts");
-            push(@args, ($details->{compositor} ? "+" : "-") . "aero");
-            push(@args, ($details->{window_drag} ? "+" : "-") . "window-drag");
-            push(@args,
-                 ($details->{menu_animations} ? "+" : "-") . "menu-anims");
-            push(@args, ($details->{themes} ? "+" : "-") . "themes");
-            push(@args, ($details->{wallpaper} ? "+" : "-") . "wallpaper");
+            push(@args, "/network:" . $details->{network})
+                if (defined($details->{network}));
             push(@args, "/tls-seclevel:" . $details->{tls_security_level})
-                if ($details->{tls_security_level} ne 1);
+                if ($details->{tls_security_level} ne "1");
+            my %transform = ("bitmap_cache"    => "bitmap-cache",
+                             "compositor"      => "aero",
+                             "compress"        => "compression",
+                             "home_drive"      => "home-drive",
+                             "keyboard_grab"   => "grab-keyboard",
+                             "menu_animations" => "menu-anims",
+                             "share_clipboard" => "clipboard",
+                             "smooth_fonts"    => "fonts",
+                             "themes"          => "themes",
+                             "wallpaper"       => "wallpaper",
+                             "window_drag"     => "window-drag");
+            while (my ($mine, $rdps) = each(%transform))
+            {
+                push(@args, ($details->{$mine} ? "+" : "-") . $rdps);
+            }
+            %transform = ("admin"        => "/admin",
+                          "ignore_certs" => "/cert:ignore",
+                          "microphone"   => "/microphone",
+                          "sound"        => "/sound",
+                          "toolbar"      => "/floatbar:sticky:on");
+            while (my ($mine, $rdps) = each(%transform))
+            {
+                push(@args, $rdps) if ($details->{$mine});
+            }
+            if (log_level() == DEBUG)
+            {
+                logger(DEBUG, "Command arguments dump:\n%s%s",
+                       Data::Dumper->Dump([\@args], ["*args"]),
+                       join(" ", @args));
+            }
+
+            # Xfreerdp is a great tool but diagnostically it's hard to tell when
+            # it has worked. So we monitor its output for the usual suspects but
+            # also as a catch all, if it exits too quickly then clearly
+            # something that hasn't been considered has happened and we need to
+            # display something to the user.
+
+            my $start_time = time();
 
             # Now run it via Expect so we can feed in the password and watch for
             # errors.
 
-            $warning_msg = __("Oops, something went wrong.");
-            $cmd_handle = Expect->new();
-            $cmd_handle->log_group(0);
-            $cmd_handle->log_stdout(0);
+            $err = 1;
+            my $hard_close;
+            my $cmd_handle = Expect->new();
+            $cmd_handle->log_group(1);
+            $cmd_handle->log_stdout((log_level() == DEBUG) ? 1 : 0);
+            $cmd_handle->log_file(sub { $output .= $_[0]; });
             $cmd_handle->spawn(@args) or die "Cannot spawn command: $!";
             $cmd_handle->
                 expect(undef,
@@ -577,14 +778,40 @@ sub handle_rdp_menu_entry($)
                             sub
                             {
                                 $cmd_handle->send($password . "\n");
-                                $warning_msg = undef;
+                                $err = 0;
                                 return exp_continue;
                             }],
                        [qr/Do you trust the above certificate\? \(Y\/T\/N\)/ =>
                             sub
                             {
-                                $cmd_handle->send("Y\n");
-                                return exp_continue;
+                                my $dialog;
+                                $output =~ s/^.+\] - //gm;
+                                $dialog = Gtk3::MessageDialog->new_with_markup
+                                    (undef,
+                                     ["modal"],
+                                     "warning",
+                                     "ok_cancel",
+                                     $output);
+                                $dialog->set_title(__("Change In Certificate"));
+                                $dialog->set_position("center-always");
+                                my $response = $dialog->run();
+                                $dialog->destroy();
+                                $output = "";
+                                if ($response eq "ok")
+                                {
+                                    $cmd_handle->send("Y\n");
+                                    return exp_continue;
+                                }
+                                else
+                                {
+                                    $cmd_handle->send("N\n");
+
+                                    # Make sure we close down quietly.
+
+                                    $err = $start_time = 0;
+                                    $hard_close = 1;
+                                    return;
+                                }
                             }],
                        [qr/REMOTE HOST IDENTIFICATION HAS CHANGED/ =>
                             sub
@@ -605,10 +832,11 @@ sub handle_rdp_menu_entry($)
                                 $hard_close = 1;
                                 return;
                             }],
-                       [qr/ERRCONNECT_AUTHENTICATION_FAILED/ =>
+                       [qr/AUTHENTICATION_FAILED|LOGON_FAILURE/ =>
                             sub
                             {
                                 $warning_msg = __("Incorrect password.");
+                                $err = 1;
                                 return;
                             }],
                        [qr/ERRCONNECT_DNS_NAME_NOT_FOUND/ =>
@@ -634,18 +862,29 @@ sub handle_rdp_menu_entry($)
                 $cmd_handle->soft_close();
             }
 
+            # If the subprocess exited too quickly then make sure $err is set.
+
+            $err = 1 if ((time() - $start_time) < 5);
+
         }
 
     }
 
-    if (defined($warning_msg))
+    if ($err)
     {
-        my $dialog = Gtk3::MessageDialog->new
-            (undef,
-             ["modal"],
-             "warning",
-             "close",
-             $warning_msg);
+        my $msg;
+        if (defined($warning_msg))
+        {
+            $msg = $warning_msg;
+        }
+        else
+        {
+            chomp($output);
+            $msg = __x("Oops, something went wrong:\n<b><i>{output}</i></b>",
+                       output => $output);
+        }
+        my $dialog = Gtk3::MessageDialog->new_with_markup
+            (undef, ["modal"], "warning", "close", $msg);
         $dialog->set_position("center-always");
         $dialog->run();
         $dialog->destroy();
@@ -663,8 +902,8 @@ sub handle_rdp_menu_entry($)
 #   Description  - Creates and populates a menu with the specified session
 #                  details.
 #
-#   Data         - $sessions    : A refernce to the list of sessions.
-#                  Return Value : The menu wdiget.
+#   Data         - $sessions    : A reference to the list of sessions.
+#                  Return Value : The menu widget.
 #
 ##############################################################################
 
@@ -676,53 +915,47 @@ sub create_connections_menu($)
     my $sessions = $_[0];
 
     my ($label,
-        $menu,
         $menu_item);
-
-    # Create the menu.
-
-    $menu = Gtk3::Menu->new();
-
-    # Deal with the menu entries derived from the user's settings file (remember
-    # the last entry is the special generic RDP entry for when the user
-    # specifies the user and hostname).
-
-    for (my $i = 0; $i < (scalar(@$sessions) - 1); ++ $i)
+    my $menu = Gtk3::Menu->new();
+    foreach my $entry (@$sessions)
     {
-        my $entry = $sessions->[$i];
-        if (scalar(keys(%$entry)) == 0)
+        if (ref($entry) eq "separator")
         {
-            $menu_item = Gtk3::SeparatorMenuItem->new();
-            $menu_item->show();
-            $menu->append($menu_item);
-        }
-        elsif ($entry->{type} eq "title")
-        {
-            if ($entry->{separator})
+
+            # Override the draw_line setting to true if there's no title. We
+            # have been asked for a separator after all.
+
+            if ($entry->{draw_line} or not defined($entry->{text}))
             {
                 $menu_item = Gtk3::SeparatorMenuItem->new();
                 $menu_item->show();
                 $menu->append($menu_item);
             }
-            $menu_item = Gtk3::MenuItem->new();
-            $label = Gtk3::Label->new();
-            $label->set_markup("<b>" . $entry->{name} . "</b>");
-            $label->show();
-            $menu_item->add($label);
-            $menu->append($menu_item);
-            $menu_item->signal_connect("event", \&title_event_cb);
-            $menu_item->show();
+            if (defined($entry->{text}))
+            {
+                $menu_item = Gtk3::MenuItem->new();
+                $label = Gtk3::Label->new();
+                $label->set_markup("<b>" . $entry->{text} . "</b>");
+                $label->show();
+                $menu_item->add($label);
+                $menu->append($menu_item);
+                $menu_item->signal_connect("event", \&title_event_cb);
+                $menu_item->show();
+            }
+
         }
-        elsif ($entry->{type} eq "rdp")
+        elsif (ref($entry) eq "rdp")
         {
             $menu_item = Gtk3::MenuItem->new(__x("{name} - RDP ({user})",
                                                  name => $entry->{name},
-                                                 user => $entry->{user_name}));
+                                                 user => $entry->{user}));
             $menu->append($menu_item);
-            $menu_item->signal_connect("activate", \&rdp_menu_entry_cb, $i);
+            $menu_item->signal_connect("activate",
+                                       \&rdp_menu_entry_cb,
+                                       $entry->{id});
             $menu_item->show();
         }
-        elsif ($entry->{type} eq "vnc")
+        elsif (ref($entry) eq "vnc")
         {
             $menu_item = Gtk3::MenuItem->new(__x("{name} - VNC",
                                                  name => $entry->{name}));
@@ -732,15 +965,22 @@ sub create_connections_menu($)
                                        $entry);
             $menu_item->show();
         }
-        elsif ($entry->{type} eq "ssh")
+        elsif (ref($entry) eq "ssh")
         {
             $menu_item = Gtk3::MenuItem->new(__x("{name} - SSH ({user})",
                                                  name => $entry->{name},
-                                                 user => $entry->{user_name}));
+                                                 user => $entry->{user}));
             $menu->append($menu_item);
             $menu_item->signal_connect("activate",
                                        \&ssh_menu_entry_cb,
                                        $entry);
+            $menu_item->show();
+        }
+        elsif (ref($entry) eq "menu")
+        {
+            $menu_item = Gtk3::MenuItem->new(__x($entry->{name}));
+            $menu_item->set_submenu(create_connections_menu($entry->{items}));
+            $menu->append($menu_item);
             $menu_item->show();
         }
     }
@@ -767,16 +1007,10 @@ sub create_options_menu($)
 
     my $sessions = $_[0];
 
-    my ($label,
-        $menu,
-        $menu_item);
+    my $menu = Gtk3::Menu->new();
 
-    # Create the menu.
-
-    $menu = Gtk3::Menu->new();
-
-    $menu_item = Gtk3::MenuItem->new();
-    $label = Gtk3::Label->new();
+    my $menu_item = Gtk3::MenuItem->new();
+    my $label = Gtk3::Label->new();
     $label->set_markup(__("<b>Options</b>"));
     $label->show();
     $menu_item->add($label);
@@ -786,9 +1020,7 @@ sub create_options_menu($)
 
     $menu_item = Gtk3::MenuItem->new(__("_RDP"));
     $menu->append($menu_item);
-    $menu_item->signal_connect("activate",
-                               \&rdp_menu_entry_cb,
-                               (scalar(@$sessions) - 1));
+    $menu_item->signal_connect("activate", \&rdp_menu_entry_cb, -1);
     $menu_item->show();
 
     $menu_item = Gtk3::MenuItem->new(__("_TigerVNC"));
@@ -805,7 +1037,20 @@ sub create_options_menu($)
     $menu_item->signal_connect
         ("activate",
          sub {
-             run_command("gvim", settings_file_name());
+             my @args;
+             my $file_name = settings_file_name();
+             for my $arg (@{$settings->{editor}})
+             {
+                 if ($arg =~ m/$file_name_token_re/)
+                 {
+                     push(@args, $arg =~ s/$file_name_token_re/$file_name/gr);
+                 }
+                 else
+                 {
+                     push(@args, $arg);
+                 }
+             }
+             run_command(@args);
          });
     $menu_item->show();
 
@@ -942,7 +1187,7 @@ sub create_password_dialog($$)
     $vbox->set_border_width(5);
     $table = Gtk3::Table->new(1, 2, FALSE);
     $label = Gtk3::Label->new(__x("Password for {user}\@{machine}:",
-                                  user => $details->{user_name},
+                                  user => $details->{user},
                                   machine => $details->{machine}));
     $label->set_alignment(1, 0.5);
     $table->attach_defaults($label, 0, 1, 0, 1);
@@ -1044,6 +1289,13 @@ sub run_command(@)
 
     my $child;
 
+    if (log_level() == DEBUG)
+    {
+        logger(DEBUG, "Command arguments dump:\n%s%s",
+               Data::Dumper->Dump([\@cmd], ["*args"]),
+               join(" ", @cmd));
+    }
+
     # Start trapping SIGCHLD so we can use waitpid().
 
     $SIG{CHLD} = "DEFAULT";
@@ -1100,15 +1352,13 @@ sub run_command(@)
 #   Routine      - load_settings
 #
 #   Description  - Loads in the users settings file that contains all the
-#                  sessions that are to be managed.
+#                  settings and sessions that are to be managed.
 #
-#   Data         - $sessions     : A reference to a scalar that is to contain
-#                                  a reference to the list of session records.
-#                  $applications : A reference to a scalar that is to contain
-#                                  a reference to the list of helper
-#                                  applications.
-#                  Return Value  : True on success, otherwise false on
-#                                  failure.
+#   Data         - $sessions    : A reference to a scalar that is to contain a
+#                                 reference to the list of session records.
+#                  $settings    : A reference to a scalar that is to contain a
+#                                 reference to the general settings record.
+#                  Return Value : True on success, otherwise false on failure.
 #
 ##############################################################################
 
@@ -1117,80 +1367,61 @@ sub run_command(@)
 sub load_settings($$)
 {
 
-    my ($sessions, $applications) = @_;
+    my ($sessions, $settings) = @_;
 
-    my (%apps,
-        $list);
-    my $fname = settings_file_name();
+    my @editor = ("gvim", "{file-name}");
+    my @terminal = ("konsole",
+                    "-p",
+                    "RemoteTabTitleFormat={title}",
+                    "-e",
+                    "{ssh-command-args}");
+
+    $$settings = {terminal              => \@terminal,
+                  editor                => \@editor,
+                  tigervnc_profile_path => undef,
+                  screen_size           => {width  => undef,
+                                            height => undef},
+                  usable_desktop_size   => {width  => undef,
+                                            height => undef},
+                  debug                 => undef};
+    local$@;
+    eval
+    {
+            my $screen = Gtk3::Gdk::Screen::get_default();
+            my $workarea = Gtk3::Gdk::Monitor::get_workarea
+                (Gtk3::Gdk::Display::get_primary_monitor
+                 (Gtk3::Gdk::Display::get_default));
+            $$settings->{screen_size}->{width} = $screen->get_width();
+            $$settings->{screen_size}->{height} = $screen->get_height();
+            $$settings->{usable_desktop_size}->{width} = $workarea->{width};
+            $$settings->{usable_desktop_size}->{height} = $workarea->{height};
+    };
+
+    # :TODO: Continue with dealing with the screen geometry settings and making
+    # use of them.
 
     # Attempt to open the settings file, if it doesn't exist then create it.
 
+    my $fname = settings_file_name();
     if (-e $fname and -f $fname)
     {
-        my $fh;
-        if (defined($fh = IO::File->new($fname, "r")))
+
+        # Read in and validate the YAML settings file.
+
+        my $yaml_data;
         {
-
-            my $have_command_entry;
-            my $data = "";
-            my $user_name = ($ENV{LOGNAME} or $ENV{USERNAME} or $ENV{USER});
-            my %defaults =
-                ("title"    => {separator => undef},
-                 "rdp"      => {port               => undef,
-                                user_name          => $user_name,
-                                domain_name        => undef,
-                                window_mode        => "maximised-no-boarders",
-                                colour_depth       => 32,
-                                keyboard_grab      => 1,
-                                share_clipboard    => 1,
-                                disk_shares        => undef,
-                                sound              => undef,
-                                microphone         => undef,
-                                compress           => 1,
-                                ignore_certs       => undef,
-                                smooth_fonts       => 1,
-                                compositor         => 1,
-                                window_drag        => 1,
-                                menu_animations    => 1,
-                                themes             => 1,
-                                wallpaper          => 1,
-                                tls_security_level => 1},
-                 "vnc"      => {port    => 1,
-                                profile => "default"},
-                 "ssh"      => {port       => undef,
-                                user_name  => $user_name,
-                                keep_alive => undef,
-                                x11_tunnel => undef},
-                 "commands" => {terminal => ["konsole",
-                                             "-p",
-                                             "RemoteTabTitleFormat={title}",
-                                             "-e",
-                                             "{ssh-command-args}"]});
-            my $json = JSON->new->utf8();
-
-            # Read in the JSON user settings, stripping out comments (which
-            # aren't allowed in JSON).
-
-            while (my $line = $fh->getline())
-            {
-                if ($line !~ m/^\s*#/)
-                {
-                    $data .= $line;
-                }
-            }
-            $fh->close();
+            local $@;
             eval
             {
-                $data = decode("UTF-8", $data, Encode::FB_CROAK);
+                local $YAML::XS::ForbidDuplicateKeys = 1;
+                $yaml_data = YAML::XS::LoadFile($fname);
             };
-            eval
-            {
-                $list = $json->decode($data);
-            };
-            if ($@)
+            my $err = $@;
+            check_syntax($yaml_data, \%settings_syntax_tree, "settings", \$err)
+                unless ($err);
+            if ($err)
             {
                 my $dialog;
-                my $err = $@;
                 chomp($err);
                 $err =~ s/ at \S+ line \d+.$/./g;
                 $dialog = Gtk3::MessageDialog->new_with_markup
@@ -1205,225 +1436,385 @@ sub load_settings($$)
                 $dialog->set_position("center-always");
                 $dialog->run();
                 $dialog->destroy();
+
+                # We have dealt with the error so reset $! so that we don't get
+                # the general failure dialog pop up as well when we exit.
+
+                $! = 0;
+
                 return;
             }
-
-            # Add on a dummy entry for the generic RDP connection entry.
-
-            push(@$list, {name             => undef,
-                          type             => "rdp",
-                          machine          => undef,
-                          user_name        => undef});
-
-            # :TODO: Need to add validation.
-
-            # Now normalise the records.
-
-            foreach my $entry (@$list)
-            {
-                if (scalar(keys(%$entry)) > 0)
-                {
-                    if (not exists($defaults{$entry->{type}}))
-                    {
-                        my $dialog;
-                        $dialog = Gtk3::MessageDialog->new_with_markup
-                            (undef,
-                             ["modal"],
-                             "warning",
-                             "close",
-                             __x("You have an unknown entry with a type of\n"
-                                     . "`{type}'. This has been ignored.",
-                                 type => Glib::Markup::escape_text
-                                             ($entry->{type})));
-                        $dialog->set_position("center-always");
-                        $dialog->run();
-                        $dialog->destroy();
-                        next;
-                    }
-                    while (my ($key, $value) =
-                           each(%{$defaults{$entry->{type}}}))
-                    {
-                        if (not exists($entry->{$key}))
-                        {
-                            $entry->{$key} = $value;
-                        }
-                    }
-                    if ($entry->{type} eq "commands")
-                    {
-                        if (exists($entry->{terminal}))
-                        {
-                            my $found_cmd;
-                            foreach my $arg (@{$entry->{terminal}})
-                            {
-                                if ($arg =~ m/$ssh_cmd_tokens_re/)
-                                {
-                                    $found_cmd = 1;
-                                    last;
-                                }
-                            }
-                            if (not $found_cmd)
-                            {
-                                my $dialog;
-                                $dialog = Gtk3::MessageDialog->new
-                                    (undef,
-                                     ["modal"],
-                                     "warning",
-                                     "close",
-                                     __("Your terminal entry contains no "
-                                        . "reference\nto `{ssh-command}' nor "
-                                        . "`{ssh-command-args}'.\nReverting to "
-                                        . "the default setting."));
-                                $dialog->set_position("center-always");
-                                $dialog->run();
-                                $dialog->destroy();
-                                $entry->{terminal} =
-                                    $defaults{"commands"}->{terminal};
-                            }
-                        }
-                        $have_command_entry = 1;
-                    }
-                }
-            }
-
-            # Make sure that we have a default commands entry if none was
-            # specified.
-
-            if (not $have_command_entry)
-            {
-                push(@$list, {type     => "commands",
-                              terminal => $defaults{"commands"}->{terminal}});
-            }
-
         }
+
+        # Deal with the general settings.
+
+        foreach my $key (keys(%{$$settings}))
+        {
+            $$settings->{$key} = $yaml_data->{settings}->{$key}
+                if (exists($yaml_data->{settings}->{$key}));
+        }
+        my $found;
+        foreach my $arg (@{$$settings->{terminal}})
+        {
+            if ($arg =~ m/$ssh_cmd_tokens_re/)
+            {
+                $found = 1;
+                last;
+            }
+        }
+        unless ($found)
+        {
+            my $dialog;
+            $dialog = Gtk3::MessageDialog->new
+                (undef,
+                 ["modal"],
+                 "warning",
+                 "close",
+                 __("Your terminal entry contains no reference\n"
+                    . "to `{ssh-command}' nor `{ssh-command-args}'.\n"
+                    . "Reverting to the default setting."));
+            $dialog->set_position("center-always");
+            $dialog->run();
+            $dialog->destroy();
+            $$settings->{terminal} = \@terminal;
+        }
+        $found = 0;
+        foreach my $arg (@{$$settings->{editor}})
+        {
+            if ($arg =~ m/$file_name_token_re/)
+            {
+                $found = 1;
+                last;
+            }
+        }
+        unless ($found)
+        {
+            my $dialog;
+            $dialog = Gtk3::MessageDialog->new
+                (undef,
+                 ["modal"],
+                 "warning",
+                 "close",
+                 __("Your editor entry contains no reference to "
+                        . "`{file-name}'.\n"
+                    . "Reverting to the default setting."));
+            $dialog->set_position("center-always");
+            $dialog->run();
+            $dialog->destroy();
+            $$settings->{editor} = \@editor;
+        }
+
+        log_level($$settings->{debug} ? DEBUG : AUTHENTICATION);
+
+        # If there are no default entries then add some.
+
+        my %found = (rdp_defaults => 0);
+        foreach my $entry (@{$yaml_data->{menu}})
+        {
+            $found{rdp_defaults} = 1 if (exists($entry->{rdp_defaults}));
+        }
+        push(@{$yaml_data->{menu}}, {rdp_defaults => {name => undef}})
+            unless ($found{rdp_defaults});
+
+        # Convert the read in menu entries into lists of typed session objects.
+
+        $$sessions = yaml_data_to_objects($yaml_data->{menu});
+
     }
     else
     {
         my $fh;
         if (defined($fh = IO::File->new($fname, "w")))
         {
-            $fh->print("# A fully qualified entry is (defaults are shown with "
-                           . "*):\n"
-                       . "# [\n"
-                       . "# Specify the terminal application to use (tokens "
-                       . "{ssh-command},\n"
-                       . "# {ssh-command-args} and {title} are supported):\n"
-                       . "#     {\n"
-                       . '#         "type"               : "commands",' . "\n"
-                       . '#         "terminal"           : ["konsole",' . "\n"
-                       . '#                                 "-p",' . "\n"
-                       . '#                                 '
-                           . '"RemoteTabTitleFormat={title}",' . "\n"
-                       . '#                                 "-e",' . "\n"
-                       . '#                                 '
-                           . '"{ssh-command-args}"]    *' . "\n"
-                       . "#     }\n"
-                       . "# and then:\n"
-                       . "#     {\n"
-                       . '#         "name"               : "My Development '
-                           . 'Desktop",' . "\n"
-                       . '#         "type"               : "rdp",' . "\n"
-                       . '#         "machine"            : "linux-dev",' . "\n"
-                       . '#         "port"               : 3389,'
-                           . '                     *' . "\n"
-                       . '#         "user_name"          : "fblogs",' . "\n"
-                       . '#         "domain_name"        : null,'
-                           . '                     *' . "\n"
-                       . '#         "window_mode"        : '
-                           . '"maximised-no-boarders",  *' . "\n"
-                       . '#         "colour_depth"       : 32,'
-                           . '                       *' . "\n"
-                       . '#         "keyboard_grab"      : true,'
-                           . '                     *' . "\n"
-                       . '#         "share_clipboard"    : true,'
-                           . '                     *' . "\n"
-                       . '#         "disk_shares"        : null,'
-                           . '                     *' . "\n"
-                       . '#         "sound"              : false,'
-                           . '                    *' . "\n"
-                       . '#         "microphone"         : false,'
-                           . '                    *' . "\n"
-                       . '#         "compress"           : true,'
-                           . '                     *' . "\n"
-                       . '#         "ignore_certs"       : false,'
-                           . '                    *' . "\n"
-                       . '#         "smooth_fonts"       : true,'
-                           . '                     *' . "\n"
-                       . '#         "compositor"         : true,'
-                           . '                     *' . "\n"
-                       . '#         "window_drag"        : true,'
-                           . '                     *' . "\n"
-                       . '#         "menu_animations"    : true,'
-                           . '                     *' . "\n"
-                       . '#         "themes"             : true,'
-                           . '                     *' . "\n"
-                       . '#         "wallpaper"          : true,'
-                           . '                     *' . "\n"
-                       . '#         "tls_security_level" : 1'
-                           . '                      *' . "\n"
-                       . "#     }\n"
-                       . "# or:\n"
-                       . "#     {\n"
-                       . '#         "name"               : "My Development '
-                           . 'Desktop",' . "\n"
-                       . '#         "type"               : "vnc",' . "\n"
-                       . '#         "machine"            : "linux-dev",' . "\n"
-                       . '#         "port"               : 1,'
-                           . '                        *' . "\n"
-                       . '#         "profile"            : "default"'
-                           . '                 *' . "\n"
-                       . "#     }\n"
-                       . "# or:\n"
-                       . "#     {\n"
-                       . '#         "name"               : "My Development '
-                           . 'Desktop",' . "\n"
-                       . '#         "type"               : "ssh",' . "\n"
-                       . '#         "machine"            : "linux-dev",' . "\n"
-                       . '#         "port"               : 22,'
-                           . '                       *' . "\n"
-                       . '#         "user_name"          : "fblogs",' . "\n"
-                       . '#         "keep_alive"         : false,'
-                           . '                    *' . "\n"
-                       . '#         "x11_tunnel"         : false'
-                           . '                     *' . "\n"
-                       . "#     }\n"
-                       . "# or:\n"
-                       . "#     {}\n"
-                       . "# for a basic separator and lastly:\n"
-                       . "#     {\n"
-                       . '#         "name"               : "My Machines",'
-                           . "\n"
-                       . '#         "type"               : "title",' . "\n"
-                       . '#         "separator"          : false'
-                           . '                     *' . "\n"
-                       . "#     }\n"
-                       . "# for a titled separator.\n"
-                       . "# ]\n"
-                       . "[\n]\n");
+            $fh->print($setting_header);
             $fh->close();
-            $list = [];
         }
+        $$sessions = [];
     }
 
-    # Update the applications list and then strip out those entries from the
-    # sessions list.
-
-    for my $entry (@$list)
+    if (log_level() == DEBUG)
     {
-        if (exists($entry->{type}) and $entry->{type} eq "commands")
+        logger(DEBUG, "Settings dump:\n%s",
+               Data::Dumper->Dump([$$settings],
+                                  ["*settings"]));
+        logger(DEBUG, "Sessions dump:\n%s",
+               Data::Dumper->Dump([$$sessions],
+                                  ["*sessions"]));
+    }
+
+    return 1;
+
+}
+#
+##############################################################################
+#
+#   Routine      - yaml_data_to_objects
+#
+#   Description  - Take YAML data representing a list of menu entries and turn
+#                  this into a list of fully initialised menu objects.
+#
+#   Data         - yaml_data    : A reference to a list of menu items as read
+#                                 in from the YAML settings file.
+#                  rdp_index    : A reference to the current RDP entry index.
+#                                 This is only used during recursion.
+#                  defaults     : A reference to the initialised default
+#                                 values record. This is only used during
+#                                 recursion.
+#                  Return Value : A reference to a list of menu objects.
+#
+##############################################################################
+
+
+
+sub yaml_data_to_objects($;$$)
+{
+
+    my ($yaml_data, $rdp_index, $defaults) = @_;
+
+    my $duplicate_defaults;
+    my $user = ($ENV{LOGNAME} or $ENV{USERNAME} or $ENV{USER});
+    my %is_boolean = (admin           => undef,
+                      bitmap_cache    => undef,
+                      compositor      => undef,
+                      compress        => undef,
+                      draw_line       => undef,
+                      home_drive      => undef,
+                      ignore_certs    => undef,
+                      keep_alive      => undef,
+                      keyboard_grab   => undef,
+                      menu_animations => undef,
+                      microphone      => undef,
+                      share_clipboard => undef,
+                      smooth_fonts    => undef,
+                      sound           => undef,
+                      themes          => undef,
+                      wallpaper       => undef,
+                      window_drag     => undef,
+                      x11_tunnel      => undef);
+
+    # Define default constructor data values for all session classes and then
+    # search for any default entries and adjust our data accordingly.
+
+    if (not defined($defaults))
+    {
+        $defaults =
+            {"separator" => {id        => -1,
+                             text      => undef,
+                             draw_line => 0},
+             "menu"      => {id    => -1,
+                             name  => undef,
+                             items => []},
+             "rdp"       => {id                 => -1,
+                             name               => undef,
+                             machine            => undef,
+                             port               => undef,
+                             user               => $user,
+                             domain_name        => undef,
+                             window_mode        => "maximised-no-boarders",
+                             colour_depth       => 32,
+                             compression_level  => undef,
+                             disk_shares        => undef,
+                             network            => undef,
+                             tls_security_level => 1,
+                             admin              => 0,
+                             compositor         => 1,
+                             compress           => 1,
+                             home_drive         => 0,
+                             ignore_certs       => 0,
+                             keyboard_grab      => 1,
+                             menu_animations    => 1,
+                             microphone         => 0,
+                             share_clipboard    => 1,
+                             smooth_fonts       => 1,
+                             sound              => 0,
+                             themes             => 1,
+                             toolbar            => 0,
+                             wallpaper          => 1,
+                             window_drag        => 1},
+             "vnc"       => {id      => -1,
+                             name    => undef,
+                             machine => undef,
+                             port    => 1,
+                             profile => "default"},
+             "ssh"       => {id         => -1,
+                             name       => undef,
+                             machine    => undef,
+                             port       => undef,
+                             user       => $user,
+                             keep_alive => 0,
+                             x11_tunnel => 0}};
+        my %defined_defaults;
+        foreach my $entry (@$yaml_data)
         {
-            while (my ($key, $value) = each(%$entry))
+            my $type = (keys(%$entry))[0];
+            if ($type =~ m/^(.+)_defaults$/)
             {
-                $apps{$key} = $value if ($key ne "type");
+                my $defaults_type = $1;
+                if (exists($defined_defaults{$type}))
+                {
+                    $duplicate_defaults = 1;
+                    next;
+                }
+                $defined_defaults{$type} = undef;
+                while (my ($key, $value) = each(%{$entry->{$type}}))
+                {
+                    $defaults->{$defaults_type}->{$key} = $value;
+                }
             }
         }
     }
-    @$list = grep({ not exists($_->{type}) or $_->{type} ne "commands" }
-                  @$list);
 
-    $$sessions = $list;
-    $$applications = \%apps;
+    # Convert the YAML data into a list of objects, one class for each type of
+    # menu entry.
 
-    return 1;
+    if (not defined($rdp_index))
+    {
+        my $i = 0;
+        $rdp_index = \$i;
+    }
+    my @menu_entries;
+    foreach my $entry (@$yaml_data)
+    {
+        my $defaults_type;
+        my %obj;
+        my $type = (keys(%$entry))[0];
+        if ($type =~ m/^(.+)_defaults$/)
+        {
+            $defaults_type = $1;
+        }
+        else
+        {
+            $defaults_type = $type;
+        }
+        while (my ($key, $value) = each(%{$defaults->{$defaults_type}}))
+        {
+            $obj{$key} = exists($entry->{$type}->{$key})
+                ? $entry->{$type}->{$key} : $value;
+            $obj{$key} = ($obj{$key} =~ m/$boolean_true_re/) ? 1 : 0
+                if (exists($is_boolean{$key}));
+        }
+        if ($type eq "menu")
+        {
+            $obj{items} = yaml_data_to_objects($entry->{menu}->{items},
+                                               $rdp_index,
+                                               $defaults);
+        }
+        $obj{id} = $$rdp_index;
+        ++ $$rdp_index;
+        push(@menu_entries, bless(\%obj, $type));
+    }
+
+    if ($duplicate_defaults)
+    {
+        my $dialog;
+        $dialog = Gtk3::MessageDialog->new
+            (undef,
+             ["modal"],
+             "warning",
+             "close",
+             __("Duplicate default session settings were found.\n"
+                . "These have been ignored. Please rectify."));
+        $dialog->set_position("center-always");
+        $dialog->run();
+        $dialog->destroy();
+    }
+
+    return \@menu_entries;
+
+}
+#
+##############################################################################
+#
+#   Routine      - patch_up_syntax_table
+#
+#   Description  - Patch the syntax table to allow for recursive menu
+#                  definitions and build up the session defaults records from
+#                  the main session definitions, so as to avoid lengthy
+#                  duplication.
+#
+#   Data         - None.
+#
+##############################################################################
+
+
+
+sub patch_up_syntax_table()
+{
+
+    # Recursive menu definitions.
+
+    foreach my $entry (@{$settings_syntax_tree{'m:menu'}})
+    {
+        if (exists($entry->{'m:menu'}))
+        {
+            $entry->{'m:menu'}->{'m:items'} = $settings_syntax_tree{'m:menu'};
+            last;
+        }
+    }
+
+    # Defaults duplication (may expand in the future from just RDP.
+
+    my $search =
+        sub {
+            my $type = $_[0];
+            foreach my $entry (@{$settings_syntax_tree{'m:menu'}})
+            {
+                return $entry->{"m:${type}"} if (exists($entry->{"m:${type}"}));
+            }
+        };
+    foreach my $type ("rdp")
+    {
+        my %defaults;
+        my $record = $search->($type);
+        while (my ($key, $value) = each(%{$search->($type)}))
+        {
+            $defaults{$key} = $value unless ($key =~ m/^(?:m:name|m:machine)$/);
+        }
+        push(@{$settings_syntax_tree{'m:menu'}},
+             {"m:${type}_defaults" => \%defaults});
+    }
+
+}
+#
+##############################################################################
+#
+#   Routine      - find_rdp_session_entry
+#
+#   Description  - Given an RDP entry id, find the corresponding session
+#                  entry.
+#
+#   Data         - $sessions    : A reference to a list of sessions that is to
+#                                 be searched recursively.
+#                  id           : The entry id that is to be found.
+#                  Return Value : A reference to the found entry on success,
+#                                 otherwise undef on failure.
+#
+##############################################################################
+
+
+
+sub find_rdp_session_entry($$)
+{
+
+    my ($sessions, $id) = @_;
+
+    # An id of -1 means the generic default RDP session.
+
+    foreach my $entry (@$sessions)
+    {
+        if (ref($entry) eq "menu")
+        {
+            my $entry = find_rdp_session_entry($entry->{items}, $id);
+            return $entry if (defined($entry));
+        }
+        elsif (($entry->{id} == $id and ref($entry) eq "rdp")
+               or ($id == -1 and ref($entry) eq "rdp_defaults"))
+        {
+            return $entry;
+        }
+    }
+
+    return undef;
 
 }
 #
@@ -1500,6 +1891,8 @@ sub settings_file_name()
 sub vnc_path()
 {
 
+    return $settings->{tigervnc_profile_path}
+        if (defined($settings->{tigervnc_profile_path}));
     return File::Spec->catdir($ENV{HOME}, ".vnc") if (exists($ENV{HOME}));
     return File::Spec->catfile($ENV{USERPROFILE}, ".vnc")
         if (exists($ENV{USERPROFILE}));
