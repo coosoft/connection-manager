@@ -85,6 +85,10 @@ my $boolean_true_re = qr/^(?:true|yes|on|1)$/i;
 
 # REs for matching file name, SSH command and window title tokens.
 
+my $desktop_height_token_re = qr/\{desktop-height\}/;
+my $desktop_usable_height_token_re = qr/\{desktop-usable-height\}/;
+my $desktop_usable_width_token_re = qr/\{desktop-usable-width\}/;
+my $desktop_width_token_re = qr/\{desktop-width\}/;
 my $file_name_token_re = qr/^\{file-name\}$/;
 my $ssh_cmd_args_token_re = qr/^\{ssh-command-args\}$/;
 my $ssh_cmd_token_re = qr/\{ssh-command\}/;
@@ -94,11 +98,9 @@ my $window_title_token_re = qr/\{title\}/;
 my %settings_syntax_tree =
     ('m:config_version' => SYNTAX_FLOAT,
      's:settings'       =>
-         {'s:terminal'              => ['r:.+'],
-          's:editor'                => ['r:.+'],
+         {'s:terminal'              => [SYNTAX_ANY],
+          's:editor'                => [SYNTAX_ANY],
           's:tigervnc_profile_path' => SYNTAX_PATH,
-          's:screen_size'           => 'r:^[0-9]+x[0-9]+$',
-          's:usable_desktop_size'   => 'r:^[0-9]+x[0-9]+$',
           's:debug'                 => SYNTAX_BOOLEAN},
      'm:menu'           =>
          [{'m:separator' =>
@@ -140,7 +142,8 @@ my %settings_syntax_tree =
                 's:themes'             => SYNTAX_BOOLEAN,
                 's:toolbar'            => SYNTAX_BOOLEAN,
                 's:window_drag'        => SYNTAX_BOOLEAN,
-                's:wallpaper'          => SYNTAX_BOOLEAN}},
+                's:wallpaper'          => SYNTAX_BOOLEAN,
+                's:custom_arguments'   => [SYNTAX_ANY]}},
           {'m:vnc'       =>
                {'m:name'               => SYNTAX_PRINTABLE,
                 'm:machine'            => SYNTAX_MACHINE,
@@ -152,7 +155,8 @@ my %settings_syntax_tree =
                 's:port'               => SYNTAX_NATURAL,
                 's:user'               => SYNTAX_USER_NAME,
                 's:keep_alive'         => SYNTAX_BOOLEAN,
-                's:x11_tunnel'         => SYNTAX_BOOLEAN}},
+                's:x11_tunnel'         => SYNTAX_BOOLEAN,
+                's:custom_arguments'   => [SYNTAX_ANY]}},
           {'m:menu'      =>
                {'m:name'               => SYNTAX_PRINTABLE,
                 'm:items'              => undef}}]);
@@ -173,11 +177,24 @@ my $setting_header = <<EOF;
 # - One can use the following tokens when specifying a text editor application:
 #   - `{file-name}' : Expands to a single string containing the name of the file
 #                     that is to be edited.
+#   The file name token must be supplied for the editor entry to be valid.
 # - In the examples below some default values are calculated at runtime. For
 #   example, default desktop sizes and user names. Some meanings:
 #   - `<Not Specified>' : No option is specified to the supporting application
 #                         and so its own default applies.
 #   - `option1|option2' : Details the options that can be used for that setting.
+# - The custom_arguments field is supported for RDP and SSH sessions (VNC
+#   sessions use TigerVNC profiles so any custom settings can go into those
+#   profiles). This gives the user the opportunity to add additional switches
+#   that aren't natively supported by this application, such as SSH tunnels or
+#   RDP encryption types. If you so wish you can make use of the following
+#   tokens:
+#   - `{desktop-width}'         : The width of the desktop in pixels.
+#   - `{desktop-height}'        : The height of the desktop in pixels.
+#   - `{desktop-usable-width}'  : The usable width of the desktop in pixels,
+#                                 taking into account panels (work area).
+#   - `{desktop-usable-height}' : The usable height of the desktop in pixels,
+#                                 taking into account panels (work area).
 #
 # config_version: 1.0
 # settings:
@@ -188,8 +205,6 @@ my $setting_header = <<EOF;
 #              "{ssh-command-args}"]
 #   editor: ["vim", "{file-name}"                 *
 #   tigervnc_profile_path: ~/.vnc                 *
-#   screen_size: 1920x1200                        *
-#   usable_desktop_size: 1920x1175                *
 #   debug: false                                  *
 #
 # menu:
@@ -231,6 +246,7 @@ my $setting_header = <<EOF;
 #       toolbar: false                            *
 #       wallpaper: true                           *
 #       window_drag: true                         *
+#       custom_arguments: []                      *
 #   - vnc:
 #       name: Linux Desktop
 #       machine: linux-dev.work.org
@@ -243,6 +259,7 @@ my $setting_header = <<EOF;
 #       user: fblogs                              *
 #       keep_alive: false                         *
 #       x11_tunnel: false                         *
+#       custom_arguments: []                      *
 #   - menu:
 #       name: Lab Virtual Machines
 #       items:
@@ -271,6 +288,7 @@ sub find_rdp_session_entry($$);
 sub handle_rdp_menu_entry($);
 sub load_settings($$);
 sub patch_up_syntax_table();
+sub process_custom_argument_tokens($);
 sub rdp_menu_entry_cb($$);
 sub run_command(@);
 sub settings_file_has_changed();
@@ -575,6 +593,8 @@ sub ssh_menu_entry_cb($$)
     push(@ssh_cmd, "-p", $details->{port}) if (defined($details->{port}));
     push(@ssh_cmd, "-o", "ServerAliveInterval=60")
         if (defined($details->{keep_alive}));
+    push(@ssh_cmd,
+         process_custom_argument_tokens($details->{custom_arguments}));
     push(@ssh_cmd, sprintf("%s\@%s", $details->{user}, $details->{machine}));
 
     # Sort out the terminal command and its arguments.
@@ -747,6 +767,8 @@ sub handle_rdp_menu_entry($)
             {
                 push(@args, $rdps) if ($details->{$mine});
             }
+            push(@args,
+                 process_custom_argument_tokens($details->{custom_arguments}));
             if (log_level() == DEBUG)
             {
                 logger(DEBUG, "Command arguments dump:\n%s%s",
@@ -1397,9 +1419,6 @@ sub load_settings($$)
             $$settings->{usable_desktop_size}->{height} = $workarea->{height};
     };
 
-    # :TODO: Continue with dealing with the screen geometry settings and making
-    # use of them.
-
     # Attempt to open the settings file, if it doesn't exist then create it.
 
     my $fname = settings_file_name();
@@ -1630,19 +1649,21 @@ sub yaml_data_to_objects($;$$)
                              themes             => 1,
                              toolbar            => 0,
                              wallpaper          => 1,
-                             window_drag        => 1},
+                             window_drag        => 1,
+                             custom_arguments   => []},
              "vnc"       => {id      => -1,
                              name    => undef,
                              machine => undef,
                              port    => 1,
                              profile => "default"},
-             "ssh"       => {id         => -1,
-                             name       => undef,
-                             machine    => undef,
-                             port       => undef,
-                             user       => $user,
-                             keep_alive => 0,
-                             x11_tunnel => 0}};
+             "ssh"       => {id               => -1,
+                             name             => undef,
+                             machine          => undef,
+                             port             => undef,
+                             user             => $user,
+                             keep_alive       => 0,
+                             x11_tunnel       => 0,
+                             custom_arguments => []}};
         my %defined_defaults;
         foreach my $entry (@$yaml_data)
         {
@@ -1815,6 +1836,54 @@ sub find_rdp_session_entry($$)
     }
 
     return undef;
+
+}
+#
+##############################################################################
+#
+#   Routine      - process_custom_argument_tokens
+#
+#   Description  - Returns the name of the user's settings file.
+#
+#   Data         - args         : A reference to a list of arguments that are
+#                                 to have their tokens replaced with values.
+#                  Return Value : A copy of the specified list with the tokens
+#                                 replaced.
+#
+##############################################################################
+
+
+
+sub process_custom_argument_tokens($)
+{
+
+    my $args = $_[0];
+
+    my @new_args;
+
+    my @tokens = ({re    => $desktop_width_token_re,
+                   value => $settings->{screen_size}->{width}},
+                  {re    => $desktop_height_token_re,
+                   value => $settings->{screen_size}->{height}},
+                  {re    => $desktop_usable_width_token_re,
+                   value => $settings->{usable_desktop_size}->{width}},
+                  {re    => $desktop_usable_height_token_re,
+                   value => $settings->{usable_desktop_size}->{height}});
+
+    foreach my $arg (@$args)
+    {
+        my $new_arg = $arg;
+        foreach my $token (@tokens)
+        {
+            if ($new_arg =~ m/$token->{re}/)
+            {
+                $new_arg =~ s/$token->{re}/$token->{value}/g;
+            }
+        }
+        push(@new_args, $new_arg);
+    }
+
+    return @new_args;
 
 }
 #
