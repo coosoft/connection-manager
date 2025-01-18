@@ -1,0 +1,34 @@
+severity = 1
+exclude = .*Prototypes .*EmptyReturn
+verbose = %f:%l:\n    %m\n    [%p]\n
+
+[ValuesAndExpressions::ProhibitInterpolationOfLiterals]
+allow_if_string_contains_single_quote = 1
+
+[-BuiltinFunctions::RequireBlockGrep]
+[-CodeLayout::ProhibitParensWithBuiltins]
+[-CodeLayout::RequireTidyCode]
+[-CodeLayout::RequireTrailingCommas]
+[-ControlStructures::ProhibitCascadingIfElse]
+[-ControlStructures::ProhibitDeepNests]
+[-ControlStructures::ProhibitPostfixControls]
+[-ControlStructures::ProhibitUnlessBlocks]
+[-Modules::ProhibitMultiplePackages]
+[-Modules::RequireNoMatchVarsWithUseEnglish]
+[-NamingConventions::Capitalization]
+[-NamingConventions::ProhibitAmbiguousNames]
+[-References::ProhibitDoubleSigils]
+[-RegularExpressions::ProhibitEscapedMetacharacters]
+[-RegularExpressions::RequireDotMatchAnything]
+[-RegularExpressions::RequireExtendedFormatting]
+[-RegularExpressions::RequireLineBoundaryMatching]
+[-Subroutines::ProhibitManyArgs]
+[-Subroutines::RequireArgUnpacking]
+[-TooMuchCode::ProhibitDuplicateLiteral]
+[-ValuesAndExpressions::ProhibitConstantPragma]
+[-ValuesAndExpressions::ProhibitEmptyQuotes]
+[-ValuesAndExpressions::ProhibitMagicNumbers]
+[-ValuesAndExpressions::ProhibitNoisyQuotes]
+[-Variables::ProhibitPackageVars]
+[-Variables::ProhibitPunctuationVars]
+[-Variables::RequireInitializationForLocalVars]
