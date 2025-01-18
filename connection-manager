@@ -57,8 +57,9 @@ use File::Spec;
 use Glib qw(FALSE TRUE);
 use Gtk3 -init;
 use IO::File;
+use IO::Socket::INET;
 use Locale::TextDomain ('connection-manager');
-use POSIX qw(:sys_wait_h _exit);
+use POSIX qw(:errno_h :sys_wait_h _exit);
 use YAML::XS;
 
 # ***** GLOBAL DATA DECLARATIONS *****
@@ -296,6 +297,7 @@ state sub logger($format, @args)
     return;
 }
 state sub patch_up_syntax_table;
+state sub ping_host;
 state sub process_custom_argument_tokens;
 state sub rdp_menu_entry_cb;
 state sub run_command;
@@ -543,6 +545,13 @@ sub vnc_menu_entry_cb($widget, $details)
         return;
     }
 
+    # Check the remote host.
+
+    return unless ping_host($details->{host},
+                            defined($details->{port})
+                                ? ($details->{port} + 5900) : 5901,
+                            2);
+
     # Build up the command by using the options in the profile file.
 
     @args = ('xtigervncviewer');
@@ -591,6 +600,12 @@ sub ssh_menu_entry_cb($widget, $details)
 
     my (@args,
         @ssh_cmd);
+
+    # Check the remote host.
+
+    return unless ping_host($details->{host},
+                            defined($details->{port}) ? $details->{port} : 22,
+                            2);
 
     # Build up the SSH command.
 
@@ -696,6 +711,13 @@ sub handle_rdp_menu_entry($details)
     if (not defined($warning_msg)
         and defined($details->{host}) and defined($details->{user}))
     {
+
+        # Check the remote host.
+
+        return 1 unless ping_host($details->{host},
+                                  defined($details->{port})
+                                      ? $details->{port} : 3389,
+                                  2);
 
         # Get the user's password.
 
@@ -1364,6 +1386,58 @@ sub run_command(@cmd)
 
     $SIG{CHLD} = 'IGNORE';
     while (waitpid(-1, WNOHANG) > 0) {}
+
+    return;
+
+}
+#
+##############################################################################
+#
+#   Routine      - ping_host
+#
+#   Description  - Checks to see if the specified host is available by
+#                  attempting a brief connection to the relevant port.
+#
+#   Data         - $host        : The hostname or IP address to connect to.
+#                  $port        : The port to connect to.
+#                  $timeout     : The timeout, in seconds, to wait before
+#                                 giving up.
+#                  Return Value : True for ok, otherwise false for a
+#                                 connection issue.
+#
+##############################################################################
+
+
+
+sub ping_host($host, $port, $timeout)
+{
+
+    my $socket = IO::Socket::INET->new(PeerAddr => $host,
+                                       PeerPort => $port,
+                                       Proto    => 'tcp',
+                                       Timeout  => $timeout);
+    if (defined($socket))
+    {
+        $socket->close();
+        return 1;
+    }
+    else
+    {
+        my $err = $!;
+        $err = 'Unknown hostname' if ($! == EINVAL);
+        my $dialog = Gtk3::MessageDialog->new_with_markup
+            (undef,
+             ['modal'],
+             'warning',
+             'close',
+             __x("Cannot connect to {host}, the reason given was:\n"
+                     . '<b><i>{error_message}</i></b>',
+                 host => $host,
+                 error_message => Glib::Markup::escape_text($err)));
+        $dialog->set_position('center-always');
+        $dialog->run();
+        $dialog->destroy();
+    }
 
     return;
 
