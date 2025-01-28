@@ -677,7 +677,6 @@ sub handle_rdp_menu_entry($details)
 {
 
     my ($err,
-        $password,
         $warning_msg);
     my $output = '';
 
@@ -724,208 +723,211 @@ sub handle_rdp_menu_entry($details)
                                       ? $details->{port} : 3389,
                                   2);
 
-        # Get the user's password.
+        # Sort out the command and its arguments.
 
-        my $dialog = create_password_dialog($details, \$password);
-        $dialog->run();
-        $dialog->destroy();
-        while (Gtk3::events_pending())
+        my @args;
+        push(@args, 'xfreerdp');
+        push(@args, '/v:' . $details->{host});
+        push(@args, '/port:' . $details->{port})
+            if (defined($details->{port}));
+        push(@args, '/u:' . $details->{user});
+        push(@args, '/d:' . $details->{domain})
+            if (defined($details->{domain}));
+        if ($details->{window_mode} eq 'fullscreen')
         {
-            Gtk3::main_iteration();
+            push(@args, '/f');
+        }
+        elsif ($details->{window_mode} eq 'maximised-no-boarders')
+        {
+            push(@args, '/workarea', '-decorations');
+        }
+        elsif ($details->{window_mode} =~ m/^\d+x\d+$/)
+        {
+            push(@args, '/size:' . $details->{window_mode});
+        }
+        push(@args, '/bpp:' . $details->{colour_depth});
+        push(@args, '/compression-level:' . $details->{compression_level})
+            if (defined($details->{compression_level}));
+        if (defined($details->{disk_shares})
+            and $details->{disk_shares} =~
+                m/^[^ ,;]+,[^,;]+(?:;[^ ,;]+,[^,;]+)*$/)
+        {
+            foreach my $entry (split(/;/, $details->{disk_shares}))
+            {
+                push(@args, '/drive:' . $entry);
+            }
+        }
+        push(@args, '/network:' . $details->{network})
+            if (defined($details->{network}));
+        push(@args, '/tls-seclevel:' . $details->{tls_security_level})
+            if ($details->{tls_security_level} ne '1');
+        my %transform = ('bitmap_cache'    => 'bitmap-cache',
+                         'compositor'      => 'aero',
+                         'compress'        => 'compression',
+                         'home_drive'      => 'home-drive',
+                         'keyboard_grab'   => 'grab-keyboard',
+                         'menu_animations' => 'menu-anims',
+                         'share_clipboard' => 'clipboard',
+                         'smooth_fonts'    => 'fonts',
+                         'themes'          => 'themes',
+                         'wallpaper'       => 'wallpaper',
+                         'window_drag'     => 'window-drag');
+        my $iter = iterator(\%transform);
+        while (my ($mine, $rdps) = $iter->())
+        {
+            push(@args, ($details->{$mine} ? '+' : '-') . $rdps);
+        }
+        %transform = ('admin'        => '/admin',
+                      'ignore_certs' => '/cert:ignore',
+                      'microphone'   => '/microphone',
+                      'sound'        => '/sound',
+                      'toolbar'      => '/floatbar:sticky:on');
+        $iter = iterator(\%transform);
+        while (my ($mine, $rdps) = $iter->())
+        {
+            push(@args, $rdps) if ($details->{$mine});
+        }
+        push(@args,
+             process_custom_argument_tokens($details->{custom_arguments}));
+        if ($settings->{debug})
+        {
+            logger("Command arguments dump:\n%s%s",
+                   Data::Dumper->Dump([\@args], ['*args']),
+                   join(' ', @args));
         }
 
-        # Now try and run the xfreerdp command capturing assorted output and
-        # entering data when prompted.
+        # Xfreerdp is a great tool but diagnostically it's hard to tell when
+        # it has worked. So we monitor its output for the usual suspects but
+        # also as a catch all, if it exits too quickly then clearly
+        # something that hasn't been considered has happened and we need to
+        # display something to the user.
 
-        if (defined($password))
-        {
+        my $start_time = time();
 
-            # Sort out the command and its arguments.
+        # Now run it via Expect so we can feed in the password and watch for
+        # errors.
 
-            my @args;
-            push(@args, 'xfreerdp');
-            push(@args, '/v:' . $details->{host});
-            push(@args, '/port:' . $details->{port})
-                if (defined($details->{port}));
-            push(@args, '/u:' . $details->{user});
-            push(@args, '/d:' . $details->{domain})
-                if (defined($details->{domain}));
-            if ($details->{window_mode} eq 'fullscreen')
-            {
-                push(@args, '/f');
-            }
-            elsif ($details->{window_mode} eq 'maximised-no-boarders')
-            {
-                push(@args, '/workarea', '-decorations');
-            }
-            elsif ($details->{window_mode} =~ m/^\d+x\d+$/)
-            {
-                push(@args, '/size:' . $details->{window_mode});
-            }
-            push(@args, '/bpp:' . $details->{colour_depth});
-            push(@args, '/compression-level:' . $details->{compression_level})
-                if (defined($details->{compression_level}));
-            if (defined($details->{disk_shares})
-                and $details->{disk_shares} =~
-                    m/^[^ ,;]+,[^,;]+(?:;[^ ,;]+,[^,;]+)*$/)
-            {
-                foreach my $entry (split(/;/, $details->{disk_shares}))
-                {
-                    push(@args, '/drive:' . $entry);
-                }
-            }
-            push(@args, '/network:' . $details->{network})
-                if (defined($details->{network}));
-            push(@args, '/tls-seclevel:' . $details->{tls_security_level})
-                if ($details->{tls_security_level} ne '1');
-            my %transform = ('bitmap_cache'    => 'bitmap-cache',
-                             'compositor'      => 'aero',
-                             'compress'        => 'compression',
-                             'home_drive'      => 'home-drive',
-                             'keyboard_grab'   => 'grab-keyboard',
-                             'menu_animations' => 'menu-anims',
-                             'share_clipboard' => 'clipboard',
-                             'smooth_fonts'    => 'fonts',
-                             'themes'          => 'themes',
-                             'wallpaper'       => 'wallpaper',
-                             'window_drag'     => 'window-drag');
-            my $iter = iterator(\%transform);
-            while (my ($mine, $rdps) = $iter->())
-            {
-                push(@args, ($details->{$mine} ? '+' : '-') . $rdps);
-            }
-            %transform = ('admin'        => '/admin',
-                          'ignore_certs' => '/cert:ignore',
-                          'microphone'   => '/microphone',
-                          'sound'        => '/sound',
-                          'toolbar'      => '/floatbar:sticky:on');
-            $iter = iterator(\%transform);
-            while (my ($mine, $rdps) = $iter->())
-            {
-                push(@args, $rdps) if ($details->{$mine});
-            }
-            push(@args,
-                 process_custom_argument_tokens($details->{custom_arguments}));
-            if ($settings->{debug})
-            {
-                logger("Command arguments dump:\n%s%s",
-                       Data::Dumper->Dump([\@args], ['*args']),
-                       join(' ', @args));
-            }
+        $err = 1;
+        my $hard_close;
+        my $cmd_handle = Expect->new();
+        $cmd_handle->log_group(1);
+        $cmd_handle->log_stdout(($settings->{debug}) ? 1 : 0);
+        $cmd_handle->log_file(sub { $output .= $_[0]; });
+        $cmd_handle->spawn(@args) or die("Cannot spawn command: $!");
+        $cmd_handle->
+            expect(undef,
+                   [qr/Password:/ =>
+                        sub
+                        {
+                            my $password;
+                            my $dialog = create_password_dialog($details,
+                                                                \$password);
+                            $dialog->run();
+                            $dialog->destroy();
+                            while (Gtk3::events_pending())
+                            {
+                                Gtk3::main_iteration();
+                            }
 
-            # Xfreerdp is a great tool but diagnostically it's hard to tell when
-            # it has worked. So we monitor its output for the usual suspects but
-            # also as a catch all, if it exits too quickly then clearly
-            # something that hasn't been considered has happened and we need to
-            # display something to the user.
+                            # Log in with the password or abort by quietly
+                            # closing down.
 
-            my $start_time = time();
-
-            # Now run it via Expect so we can feed in the password and watch for
-            # errors.
-
-            $err = 1;
-            my $hard_close;
-            my $cmd_handle = Expect->new();
-            $cmd_handle->log_group(1);
-            $cmd_handle->log_stdout(($settings->{debug}) ? 1 : 0);
-            $cmd_handle->log_file(sub { $output .= $_[0]; });
-            $cmd_handle->spawn(@args) or die("Cannot spawn command: $!");
-            $cmd_handle->
-                expect(undef,
-                       [qr/Password:/ =>
-                            sub
+                            if (defined($password))
                             {
                                 $cmd_handle->send($password . "\n");
                                 $err = 0;
                                 return exp_continue;
-                            }],
-                       [qr/Do you trust the above certificate\? \(Y\/T\/N\)/ =>
-                            sub
+                            }
+                            else
                             {
-                                my $dialog;
-                                $output =~ s/^.+\] - //gm;
-                                $dialog = Gtk3::MessageDialog->new_with_markup
-                                    (undef,
-                                     ['modal'],
-                                     'warning',
-                                     'ok_cancel',
-                                     $output);
-                                $dialog->set_title(__('Change In Certificate'));
-                                $dialog->set_position('center-always');
-                                my $response = $dialog->run();
-                                $dialog->destroy();
-                                $output = '';
-                                if ($response eq 'ok')
-                                {
-                                    $cmd_handle->send("Y\n");
-                                    return exp_continue;
-                                }
-                                else
-                                {
-                                    $cmd_handle->send("N\n");
-
-                                    # Make sure we close down quietly.
-
-                                    $err = $start_time = 0;
-                                    $hard_close = 1;
-                                    return;
-                                }
-                            }],
-                       [qr/REMOTE HOST IDENTIFICATION HAS CHANGED/ =>
-                            sub
-                            {
-                                $warning_msg =
-                                    __('The key for the remote host has '
-                                           . "changed.\n\n"
-                                       . 'Edit ~/.config/freerdp/known_hosts '
-                                           . "if this is expected,\n"
-                                       . 'otherwise something nasty has '
-                                           . 'happened!');
-
-                                # This may not close as xfreerdp in some
-                                # versions then goes on to prompt for whether
-                                # the new certificate should be accepted. We
-                                # don't want this so force it to stop.
-
+                                $err = $start_time = 0;
                                 $hard_close = 1;
                                 return;
-                            }],
-                       [qr/AUTHENTICATION_FAILED|LOGON_FAILURE/ =>
-                            sub
+                            }
+                        }],
+                   [qr/Do you trust the above certificate\? \(Y\/T\/N\)/ =>
+                        sub
+                        {
+                            my $dialog;
+                            $output =~ s/^.+\] - //gm;
+                            $dialog = Gtk3::MessageDialog->new_with_markup
+                                (undef,
+                                 ['modal'],
+                                 'warning',
+                                 'ok_cancel',
+                                 $output);
+                            $dialog->set_title(__('Change In Certificate'));
+                            $dialog->set_position('center-always');
+                            my $response = $dialog->run();
+                            $dialog->destroy();
+                            $output = '';
+                            if ($response eq 'ok')
                             {
-                                $warning_msg = __('Incorrect password.');
-                                $err = 1;
-                                return;
-                            }],
-                       [qr/ERRCONNECT_DNS_NAME_NOT_FOUND/ =>
-                            sub
+                                $cmd_handle->send("Y\n");
+                                return exp_continue;
+                            }
+                            else
                             {
-                                $warning_msg =
-                                    __('The remote host is unknown.');
+                                $cmd_handle->send("N\n");
+
+                                # Make sure we close down quietly.
+
+                                $err = $start_time = 0;
+                                $hard_close = 1;
                                 return;
-                            }],
-                       [qr/ERRCONNECT_CONNECT_TRANSPORT_FAILED/ =>
-                            sub
-                            {
-                                $warning_msg = __('The remote host is down or '
-                                                  . 'unreachable.');
-                                return;
-                            }]);
-            if ($hard_close)
-            {
-                $cmd_handle->hard_close();
-            }
-            else
-            {
-                $cmd_handle->soft_close();
-            }
+                            }
+                        }],
+                   [qr/REMOTE HOST IDENTIFICATION HAS CHANGED/ =>
+                        sub
+                        {
+                            $warning_msg =
+                                __('The key for the remote host has changed.'
+                                   .     "\n\n"
+                                   . 'Edit ~/.config/freerdp/known_hosts if '
+                                       . "this is expected,\n"
+                                   . 'otherwise something nasty has happened!');
 
-            # If the subprocess exited too quickly then make sure $err is set.
+                            # This may not close as xfreerdp in some versions
+                            # then goes on to prompt for whether the new
+                            # certificate should be accepted. We don't want this
+                            # so force it to stop.
 
-            $err = 1 if ((time() - $start_time) < 5);
-
+                            $hard_close = 1;
+                            return;
+                        }],
+                   [qr/AUTHENTICATION_FAILED|LOGON_FAILURE/ =>
+                        sub
+                        {
+                            $warning_msg = __('Incorrect password.');
+                            $err = 1;
+                            return;
+                        }],
+                   [qr/ERRCONNECT_DNS_NAME_NOT_FOUND/ =>
+                        sub
+                        {
+                            $warning_msg =
+                                __('The remote host is unknown.');
+                            return;
+                        }],
+                   [qr/ERRCONNECT_CONNECT_TRANSPORT_FAILED/ =>
+                        sub
+                        {
+                            $warning_msg = __('The remote host is down or '
+                                              . 'unreachable.');
+                            return;
+                        }]);
+        if ($hard_close)
+        {
+            $cmd_handle->hard_close();
         }
+        else
+        {
+            $cmd_handle->soft_close();
+        }
+
+        # If the subprocess exited too quickly then make sure $err is set.
+
+        $err = 1 if ((time() - $start_time) < 5);
 
     }
 
