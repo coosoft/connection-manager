@@ -64,13 +64,14 @@ use YAML::XS;
 
 # ***** GLOBAL DATA DECLARATIONS *****
 
-# Constant for the name of the user's settings file.
+# Constants for the name of the user's settings files.
 
-use constant USER_SETTINGS_FILE => 'connection-manager.yml';
+use constant USER_RDP_HISTORY_FILE => 'connection-manager-rdp-history.dat';
+use constant USER_SETTINGS_FILE    => 'connection-manager.yml';
 
 # The general settings for the application.
 
-my $settings = {debug => undef};
+my $settings = {debug => 0};
 
 # REs for matching file name, SSH command and window title tokens.
 
@@ -94,6 +95,7 @@ my %settings_syntax_tree =
      's:settings'       =>
          {'s:terminal'              => ['R:anything'],
           's:editor'                => ['R:anything'],
+          's:history_size'          => ['i:1,50'],
           's:tigervnc_profile_path' => 'R:unix_path',
           's:debug'                 => 'R:boolean'},
      'm:menu'           =>
@@ -198,6 +200,7 @@ my $setting_header = <<'EOF';
 #              "-e",
 #              "{ssh-command-args}"]
 #   editor: ["vim", "{file-name}"                 *
+#   history_size: 20                              *
 #   tigervnc_profile_path: ~/.vnc                 *
 #   debug: false                                  *
 #
@@ -290,6 +293,7 @@ state sub iterator($hash_ref)
                return;
            };
 }
+state sub load_rdp_history;
 state sub load_settings;
 state sub logger($format, @args)
 {
@@ -301,10 +305,11 @@ state sub ping_host;
 state sub process_custom_argument_tokens;
 state sub rdp_menu_entry_cb;
 state sub run_command;
+state sub settings_file_full_path;
 state sub settings_file_has_changed;
-state sub settings_file_name;
 state sub ssh_menu_entry_cb;
 state sub title_event_cb;
+state sub update_rdp_history;
 state sub vnc_menu_entry_cb;
 state sub vnc_path;
 state sub yaml_data_to_objects;
@@ -1088,7 +1093,7 @@ sub create_options_menu($sessions)
         ('activate',
          sub {
              my @args;
-             my $file_name = settings_file_name();
+             my $file_name = settings_file_full_path(USER_SETTINGS_FILE);
              for my $arg (@{$settings->{editor}})
              {
                  if ($arg =~ m/$file_name_token_re/)
@@ -1135,7 +1140,8 @@ sub create_options_menu($sessions)
 sub create_rdp_connection_dialog($input)
 {
 
-    my ($dialog,
+    my ($combobox,
+        $dialog,
         $entry,
         $label,
         $table,
@@ -1157,7 +1163,12 @@ sub create_rdp_connection_dialog($input)
                                  . '([domain\]user@host[:port]):'));
     $label->set_alignment(1, 0.5);
     $table->attach_defaults($label, 0, 1, 0, 1);
-    $entry = Gtk3::Entry->new();
+    $combobox = Gtk3::ComboBoxText->new_with_entry();
+    foreach my $entry (load_rdp_history())
+    {
+        $combobox->append_text($entry);
+    }
+    $entry = $combobox->get_child();
     $entry->set_text('');
     $entry->set_width_chars(40);
     $entry->set_activates_default(TRUE);
@@ -1185,9 +1196,10 @@ sub create_rdp_connection_dialog($input)
              if ($button eq 'ok')
              {
                  $$input = $entry->get_text();
+                 update_rdp_history($$input);
              }
          });
-    $table->attach_defaults($entry, 1, 2, 0, 1);
+    $table->attach_defaults($combobox, 1, 2, 0, 1);
     $vbox->pack_start($table, 0, 0, 4);
     $vbox->show_all();
 
@@ -1472,12 +1484,13 @@ sub load_settings($sessions, $settings)
 
     $$settings = {terminal              => \@terminal,
                   editor                => \@editor,
+                  history_size          => 20,
                   tigervnc_profile_path => undef,
                   screen_size           => {width  => undef,
                                             height => undef},
                   usable_desktop_size   => {width  => undef,
                                             height => undef},
-                  debug                 => undef};
+                  debug                 => 0};
     local $@;
     eval
     {
@@ -1493,7 +1506,7 @@ sub load_settings($sessions, $settings)
 
     # Attempt to open the settings file, if it doesn't exist then create it.
 
-    my $fname = settings_file_name();
+    my $fname = settings_file_full_path(USER_SETTINGS_FILE);
     if (-e $fname and -f $fname)
     {
 
@@ -1966,6 +1979,99 @@ sub process_custom_argument_tokens($args)
 #
 ##############################################################################
 #
+#   Routine      - load_rdp_history
+#
+#   Description  - Returns the list of previously saved ad-hoc RDP connection
+#                  details entered into the RDP connection dialog.
+#
+#   Data         - Return Value : A list of connection details.
+#
+##############################################################################
+
+
+
+sub load_rdp_history()
+{
+
+    my ($fh,
+        @list);
+
+    defined($fh = IO::File->new(settings_file_full_path(USER_RDP_HISTORY_FILE),
+                                'r'))
+        or return;
+    while (my $line = $fh->getline())
+    {
+        chomp($line);
+        push(@list, $line) if ($line !~ m/^\s*#/);
+    }
+    $fh->close();
+
+    return @list;
+
+}
+#
+##############################################################################
+#
+#   Routine      - update_rdp_history
+#
+#   Description  - Updates the saved list of ad-hoc RDP connection details
+#                  that have been entered into the RDP connection dialog or
+#                  its history.
+#
+#   Data         - $rdp_details : Newly entered or selected details for an RDP
+#                                 connection.
+#
+##############################################################################
+
+
+
+sub update_rdp_history($rdp_details)
+{
+
+    my ($fh,
+        %hit_map,
+        @list);
+    my $rdp_history_file = settings_file_full_path(USER_RDP_HISTORY_FILE);
+
+    # If the entry is already in the list then don't bother saving anything.
+
+    @list = load_rdp_history();
+    @hit_map{@list} = undef;
+    return if (exists($hit_map{$rdp_details}));
+
+    # Ok it's changed so save it.
+
+    if (not defined($fh = IO::File->new($rdp_history_file, 'w')))
+    {
+        my $dialog = Gtk3::MessageDialog->new_with_markup
+            (undef,
+             ['modal'],
+             'warning',
+             'close',
+             __x("Cannot save the RDP connection history to\n"
+                     . "{file_name},\nthe system gave:\n"
+                     . '<b><i>{error_message}</i></b>',
+                 file_name => Glib::Markup::escape_text($rdp_history_file),
+                 error_message => Glib::Markup::escape_text($!)));
+        $dialog->set_position('center-always');
+        $dialog->run();
+        $dialog->destroy();
+        return;
+    }
+
+    $fh->print("# DO NOT EDIT - This file will be overwritten.\n");
+    unshift(@list, $rdp_details);
+    splice(@list, $settings->{history_size});
+    foreach my $entry (@list)
+    {
+        $fh->print($entry . "\n");
+    }
+    $fh->close();
+
+}
+#
+##############################################################################
+#
 #   Routine      - settings_file_has_changed
 #
 #   Description  - Returns whether the user's settings file has changed since
@@ -1981,7 +2087,7 @@ sub process_custom_argument_tokens($args)
 sub settings_file_has_changed()
 {
 
-    my $fname = settings_file_name();
+    my $fname = settings_file_full_path(USER_SETTINGS_FILE);
     state $ctime = 0;
 
     if (-e $fname)
@@ -2000,24 +2106,25 @@ sub settings_file_has_changed()
 #
 ##############################################################################
 #
-#   Routine      - settings_file_name
+#   Routine      - settings_file_full_path
 #
-#   Description  - Returns the name of the user's settings file.
+#   Description  - Returns the the full path to the specified settings file.
 #
-#   Data         - Return Value : The name of the user's settings file.
+#   Data         - $file_name   : The name of the file to look for.
+#                  Return Value : The name of the user's settings file.
 #
 ##############################################################################
 
 
 
-sub settings_file_name()
+sub settings_file_full_path($file_name)
 {
 
-    return File::Spec->catfile($ENV{HOME}, '.config', USER_SETTINGS_FILE)
+    return File::Spec->catfile($ENV{HOME}, '.config', $file_name)
         if (exists($ENV{HOME}));
-    return File::Spec->catfile($ENV{USERPROFILE}, '.config', USER_SETTINGS_FILE)
+    return File::Spec->catfile($ENV{USERPROFILE}, '.config', $file_name)
         if (exists($ENV{USERPROFILE}));
-    return USER_SETTINGS_FILE;
+    return $file_name;
 
 }
 #
