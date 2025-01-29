@@ -819,7 +819,8 @@ sub handle_rdp_menu_entry($details)
         # errors.
 
         $err = 1;
-        my $hard_close;
+        my ($hard_close,
+            $user_logged_out);
         my $cmd_handle = Expect->new();
         $cmd_handle->log_group(1);
         $cmd_handle->log_stdout(($settings->{debug}) ? 1 : 0);
@@ -926,6 +927,13 @@ sub handle_rdp_menu_entry($details)
                             $warning_msg = __('The remote host is down or '
                                               . 'unreachable.');
                             return;
+                        }],
+                   [qr/ERRINFO_LOGOFF_BY_USER/ =>
+                        sub
+                        {
+                            $err = 0;
+                            $user_logged_out = 1;
+                            return;
                         }]);
         if ($hard_close)
         {
@@ -936,9 +944,10 @@ sub handle_rdp_menu_entry($details)
             $cmd_handle->soft_close();
         }
 
-        # If the subprocess exited too quickly then make sure $err is set.
+        # If the subprocess exited too quickly and the user didn't log out then
+        # make sure $err is set.
 
-        $err = 1 if ((time() - $start_time) < 5);
+        $err = 1 if (not $user_logged_out and (time() - $start_time) < 5);
 
     }
 
