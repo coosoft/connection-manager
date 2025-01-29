@@ -90,72 +90,81 @@ my @host =
      'R:hostname',
      'R:ipv4_addr',
      'R:ipv6_addr');
+my %rdp_settings =
+    ('s:port'               => 'i:1,65535',
+     's:user'               => 'R:user_name',
+     's:domain_name'        => 'R:hostname',
+     's:window_mode'        => 'r:^(?:fullscreen'
+                                   . '|maximised-no-boarders)'
+                                   . '|(?:\d+x\d+)$',
+     's:colour_depth'       => 'r:^(?:8|16|24|32)$',
+     's:compression_level'  => 'r:^(?:0|1|2)$',
+     's:disk_shares'        => 'r:^[^ ,;]+,[^,;]+(?:;[^ ,;]+,'
+                                   . '[^,;]+)*$',
+     's:network'            => 'r:^(?:|auto'
+                                   . '|broadband'
+                                   . '|broadband-high'
+                                   . '|broadband-low'
+                                   . '|lan'
+                                   . '|modem'
+                                   . '|wan)$',
+     's:tls_security_level' => 'f:0,5.9',
+     's:admin'              => 'R:boolean',
+     's:bitmap_cache'       => 'R:boolean',
+     's:compositor'         => 'R:boolean',
+     's:compress'           => 'R:boolean',
+     's:home_drive'         => 'R:boolean',
+     's:ignore_certs'       => 'R:boolean',
+     's:keyboard_grab'      => 'R:boolean',
+     's:menu_animations'    => 'R:boolean',
+     's:microphone'         => 'R:boolean',
+     's:share_clipboard'    => 'R:boolean',
+     's:smooth_fonts'       => 'R:boolean',
+     's:sound'              => 'R:boolean',
+     's:themes'             => 'R:boolean',
+     's:toolbar'            => 'R:boolean',
+     's:window_drag'        => 'R:boolean',
+     's:wallpaper'          => 'R:boolean',
+     's:custom_arguments'   => 'R:anything');
+my %vnc_settings =
+    ('s:port'    => 'i:1,65535',
+     's:profile' => 'r:^[^/]+$');
+my %ssh_settings =
+    ('s:port'             => 'i:1,65535',
+     's:user'             => 'R:user_name',
+     's:keep_alive'       => 'R:boolean',
+     's:x11_tunnel'       => 'R:boolean',
+     's:custom_arguments' => ['R:anything']);
 my %settings_syntax_tree =
     ('m:config_version' => 'f:0',
      's:settings'       =>
          {'s:terminal'              => ['R:anything'],
           's:editor'                => ['R:anything'],
-          's:history_size'          => ['i:1,50'],
+          's:rdp_defaults'          => \%rdp_settings,
+          's:ssh_defaults'          => \%ssh_settings,
+          's:vnc_defaults'          => \%vnc_settings,
           's:tigervnc_profile_path' => 'R:unix_path',
+          's:history_size'          => ['i:1,50'],
           's:debug'                 => 'R:boolean'},
      'm:menu'           =>
          [{'m:separator' =>
                {'s:text'      => 'R:printable',
                 's:draw_line' => 'R:boolean'}},
           {'m:rdp'       =>
-               {'m:name'               => 'R:printable',
-                'm:host'               => \@host,
-                's:port'               => 'i:1,65535',
-                's:user'               => 'R:user_name',
-                's:domain_name'        => 'R:hostname',
-                's:window_mode'        => 'r:^(?:fullscreen'
-                                              . '|maximised-no-boarders)'
-                                              . '|(?:\d+x\d+)$',
-                's:colour_depth'       => 'r:^(?:8|18|24|32)$',
-                's:compression_level'  => 'r:^(?:0|1|2)$',
-                's:disk_shares'        => 'r:^[^ ,;]+,[^,;]+(?:;[^ ,;]+,'
-                                              . '[^,;]+)*$',
-                's:network'            => 'r:^(?:|auto'
-                                              . '|broadband'
-                                              . '|broadband-high'
-                                              . '|broadband-low'
-                                              . '|lan'
-                                              . '|modem'
-                                              . '|wan)$',
-                's:tls_security_level' => 'f:0',
-                's:admin'              => 'R:boolean',
-                's:bitmap_cache'       => 'R:boolean',
-                's:compositor'         => 'R:boolean',
-                's:compress'           => 'R:boolean',
-                's:home_drive'         => 'R:boolean',
-                's:ignore_certs'       => 'R:boolean',
-                's:keyboard_grab'      => 'R:boolean',
-                's:menu_animations'    => 'R:boolean',
-                's:microphone'         => 'R:boolean',
-                's:share_clipboard'    => 'R:boolean',
-                's:smooth_fonts'       => 'R:boolean',
-                's:sound'              => 'R:boolean',
-                's:themes'             => 'R:boolean',
-                's:toolbar'            => 'R:boolean',
-                's:window_drag'        => 'R:boolean',
-                's:wallpaper'          => 'R:boolean',
-                's:custom_arguments'   => 'R:anything'}},
-          {'m:vnc'       =>
-               {'m:name'               => 'R:printable',
-                'm:host'               => \@host,
-                's:port'               => 'i:1,65535',
-                's:profile'            => 'r:^[^/]+$'}},
+               {'m:name'      => 'R:printable',
+                'm:host'      => \@host,
+                %rdp_settings}},
           {'m:ssh'       =>
-               {'m:name'               => 'R:printable',
-                'm:host'               => \@host,
-                's:port'               => 'i:1,65535',
-                's:user'               => 'R:user_name',
-                's:keep_alive'         => 'R:boolean',
-                's:x11_tunnel'         => 'R:boolean',
-                's:custom_arguments'   => ['R:anything']}},
+               {'m:name'      => 'R:printable',
+                'm:host'      => \@host,
+                %ssh_settings}},
+          {'m:vnc'       =>
+               {'m:name'      => 'R:printable',
+                'm:host'      => \@host,
+                %vnc_settings}},
           {'m:menu'      =>
-               {'m:name'               => 'R:printable',
-                'm:items'              => undef}}]);
+               {'m:name'      => 'R:printable',
+                'm:items'     => undef}}]);
 
 my $setting_header = <<'EOF';
 # Notes:
@@ -177,14 +186,13 @@ my $setting_header = <<'EOF';
 # - In the examples below some default values are calculated at runtime. For
 #   example, default desktop sizes and user names. Some meanings:
 #   - `<Not Specified>' : No option is specified to the supporting application
-#                         and so its own default applies.
+#                         and so its own default setting applies.
 #   - `option1|option2' : Details the options that can be used for that setting.
 # - The custom_arguments field is supported for RDP and SSH sessions (VNC
 #   sessions use TigerVNC profiles so any custom settings can go into those
 #   profiles). This gives the user the opportunity to add additional switches
 #   that aren't natively supported by this application, such as SSH tunnels or
-#   RDP encryption types. If you so wish you can make use of the following
-#   tokens:
+#   SSH key identities. If you so wish you can make use of the following tokens:
 #   - `{desktop-width}'         : The width of the desktop in pixels.
 #   - `{desktop-height}'        : The height of the desktop in pixels.
 #   - `{desktop-usable-width}'  : The usable width of the desktop in pixels,
@@ -200,19 +208,22 @@ my $setting_header = <<'EOF';
 #              "-e",
 #              "{ssh-command-args}"]
 #   editor: ["vim", "{file-name}"                 *
-#   history_size: 20                              *
+#   rdp_defaults:
+#   ssh_defaults:
+#   vnc_defaults:
+#     The above `*_defaults' records can be used to override the built in
+#     default values for assorted fields within those connection types. With the
+#     exception of the `name' and `host' fields all of the others are valid.
+#     Please look at the RDP, SSH and VNC menu entries below to find out the
+#     field names and their built in default values.
 #   tigervnc_profile_path: ~/.vnc                 *
+#   history_size: 20                              *
 #   debug: false                                  *
 #
 # menu:
 #   - separator:
 #       text: null                                *
 #       draw_line: false                          * # True if no `text'.
-#   - rdp-defaults:
-#       # This contains the entries as listed under normal RDP entries, apart
-#       # from `name' and `host', but instead specifies default values to be
-#       # used for those other entries. Please note, if you use this entry type
-#       # then it has to be defined at the top level.
 #   - rdp:
 #       name:
 #       host:
@@ -1486,12 +1497,15 @@ sub load_settings($sessions, $settings)
 
     $$settings = {terminal              => \@terminal,
                   editor                => \@editor,
-                  history_size          => 20,
+                  rdp_defaults          => {},
+                  ssh_defaults          => {},
+                  vnc_defaults          => {},
                   tigervnc_profile_path => undef,
                   screen_size           => {width  => undef,
                                             height => undef},
                   usable_desktop_size   => {width  => undef,
                                             height => undef},
+                  history_size          => 20,
                   debug                 => 0};
     local $@;
     eval
@@ -1620,16 +1634,6 @@ sub load_settings($sessions, $settings)
             $$settings->{editor} = \@editor;
         }
 
-        # If there are no default entries then add some.
-
-        my %found = (rdp_defaults => 0);
-        foreach my $entry (@{$yaml_data->{menu}})
-        {
-            $found{rdp_defaults} = 1 if (exists($entry->{rdp_defaults}));
-        }
-        push(@{$yaml_data->{menu}}, {rdp_defaults => {name => undef}})
-            unless ($found{rdp_defaults});
-
         # Convert the read in menu entries into lists of typed session objects.
 
         $$sessions = yaml_data_to_objects($yaml_data->{menu});
@@ -1755,25 +1759,37 @@ sub yaml_data_to_objects($yaml_data, $rdp_index = undef, $defaults = undef)
                              keep_alive       => 0,
                              x11_tunnel       => 0,
                              custom_arguments => []}};
+
+        # Look through the settings record, copying across any overridden
+        # default values.
+
         my %defined_defaults;
-        foreach my $entry (@$yaml_data)
+        foreach my $entry (keys(%$settings))
         {
-            my $type = (keys(%$entry))[0];
-            if ($type =~ m/^(.+)_defaults$/)
+            if ($entry =~ m/^(.+)_defaults$/)
             {
-                my $defaults_type = $1;
+                my $type = $1;
                 if (exists($defined_defaults{$type}))
                 {
                     $duplicate_defaults = 1;
                     next;
                 }
                 $defined_defaults{$type} = undef;
-                my $iter = iterator($entry->{$type});
+                my $iter = iterator($settings->{$entry});
                 while (my ($key, $value) = $iter->())
                 {
-                    $defaults->{$defaults_type}->{$key} = $value;
+                    $defaults->{$type}->{$key} = exists($is_boolean{$key})
+                        ? Config::Verifier->string_to_boolean($value) : $value
+                        unless ($key =~ m/^host|name$/);
                 }
             }
+        }
+
+        # Now update the default entries under the settings record.
+
+        foreach my $type (qw(rdp ssh vnc))
+        {
+            $settings->{$type . '_defaults'} = $defaults->{$type};
         }
     }
 
@@ -1788,18 +1804,9 @@ sub yaml_data_to_objects($yaml_data, $rdp_index = undef, $defaults = undef)
     my @menu_entries;
     foreach my $entry (@$yaml_data)
     {
-        my $defaults_type;
         my %obj;
         my $type = (keys(%$entry))[0];
-        if ($type =~ m/^(.+)_defaults$/)
-        {
-            $defaults_type = $1;
-        }
-        else
-        {
-            $defaults_type = $type;
-        }
-        my $iter = iterator($defaults->{$defaults_type});
+        my $iter = iterator($defaults->{$type});
         while (my ($key, $value) = $iter->())
         {
             $obj{$key} = exists($entry->{$type}->{$key})
@@ -1915,6 +1922,8 @@ sub find_rdp_session_entry($sessions, $id)
 
     # An id of -1 means the generic default RDP session.
 
+    return $settings->{rdp_defaults} if ($id == -1);
+
     foreach my $entry (@$sessions)
     {
         if (ref($entry) eq 'menu')
@@ -1922,8 +1931,7 @@ sub find_rdp_session_entry($sessions, $id)
             my $entry = find_rdp_session_entry($entry->{items}, $id);
             return $entry if (defined($entry));
         }
-        elsif (($entry->{id} == $id and ref($entry) eq 'rdp')
-               or ($id == -1 and ref($entry) eq 'rdp_defaults'))
+        elsif ($entry->{id} == $id and ref($entry) eq 'rdp')
         {
             return $entry;
         }
