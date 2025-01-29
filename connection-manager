@@ -64,6 +64,10 @@ use YAML::XS;
 
 # ***** GLOBAL DATA DECLARATIONS *****
 
+# Constant for the name of the icon used by the application.
+
+use constant ICON_NAME => 'preferences-system-login';
+
 # Constants for the name of the user's settings files.
 
 use constant USER_RDP_HISTORY_FILE => 'connection-manager-rdp-history.dat';
@@ -378,6 +382,8 @@ our $VERSION = '1.0';
                  __x('Your preferences could not be loaded, the reason given '
                          . "was:\n<b><i>{error_message}</i></b>",
                      error_message => Glib::Markup::escape_text($err)));
+            $dialog->set_title(__('Connection Manager - Error'));
+            $dialog->set_icon_name(ICON_NAME);
             $dialog->set_position('center-always');
             $dialog->run();
             $dialog->destroy();
@@ -415,6 +421,8 @@ our $VERSION = '1.0';
                  'error',
                  'close',
                  __('Internal error: Invalid --rdp argument.'));
+            $dialog->set_title(__('Connection Manager - Error'));
+            $dialog->set_icon_name(ICON_NAME);
             $dialog->set_position('center-always');
             $dialog->run();
             $dialog->destroy();
@@ -555,6 +563,8 @@ sub vnc_menu_entry_cb($widget, $details)
              'close',
              __x("TigerVNC profile file\n`{profile}'\ncannot be read.",
                  profile => $profile_file));
+        $dialog->set_title(__('Connection Manager - Warning'));
+        $dialog->set_icon_name(ICON_NAME);
         $dialog->set_position('center-always');
         $dialog->run();
         $dialog->destroy();
@@ -862,13 +872,13 @@ sub handle_rdp_menu_entry($details)
                         {
                             my $dialog;
                             $output =~ s/^.+\] - //gm;
-                            $dialog = Gtk3::MessageDialog->new_with_markup
-                                (undef,
-                                 ['modal'],
-                                 'warning',
-                                 'ok_cancel',
-                                 $output);
+                            $dialog = Gtk3::MessageDialog->new(undef,
+                                                               ['modal'],
+                                                               'warning',
+                                                               'ok_cancel',
+                                                               $output);
                             $dialog->set_title(__('Change In Certificate'));
+                            $dialog->set_icon_name(ICON_NAME);
                             $dialog->set_position('center-always');
                             my $response = $dialog->run();
                             $dialog->destroy();
@@ -962,10 +972,12 @@ sub handle_rdp_menu_entry($details)
         {
             chomp($output);
             $msg = __x("Oops, something went wrong:\n<b><i>{output}</i></b>",
-                       output => $output);
+                       output => Glib::Markup::escape_text($output));
         }
         my $dialog = Gtk3::MessageDialog->new_with_markup
             (undef, ['modal'], 'warning', 'close', $msg);
+        $dialog->set_title(__('Connection Manager - Warning'));
+        $dialog->set_icon_name(ICON_NAME);
         $dialog->set_position('center-always');
         $dialog->run();
         $dialog->destroy();
@@ -1174,6 +1186,7 @@ sub create_rdp_connection_dialog($input)
                                 ['modal'],
                                 'gtk-cancel' => 'cancel',
                                 'gtk-ok' => 'ok');
+    $dialog->set_icon_name(ICON_NAME);
     $dialog->set_default_response('ok');
     $dialog->set_response_sensitive ('ok', FALSE);
     $dialog->set_position('center-always');
@@ -1259,6 +1272,7 @@ sub create_password_dialog($details, $password)
                                 ['modal'],
                                 'gtk-cancel' => 'cancel',
                                 'gtk-ok' => 'ok');
+    $dialog->set_icon_name(ICON_NAME);
     $dialog->set_default_response('ok');
     $dialog->set_response_sensitive ('ok', FALSE);
     $dialog->set_position('center-always');
@@ -1411,6 +1425,8 @@ sub run_command(@cmd)
                      . "the system gave:\n<b><i>{error_message}</i></b>",
                  name => Glib::Markup::escape_text($prog),
                  error_message => Glib::Markup::escape_text($!)));
+        $dialog->set_title(__('Connection Manager - Warning'));
+        $dialog->set_icon_name(ICON_NAME);
         $dialog->set_position('center-always');
         $dialog->run();
         $dialog->destroy();
@@ -1468,6 +1484,8 @@ sub ping_host($host, $port, $timeout)
                      . '<b><i>{error_message}</i></b>',
                  host => $host,
                  error_message => Glib::Markup::escape_text($err)));
+        $dialog->set_title(__('Connection Manager - Warning'));
+        $dialog->set_icon_name(ICON_NAME);
         $dialog->set_position('center-always');
         $dialog->run();
         $dialog->destroy();
@@ -1572,6 +1590,8 @@ sub load_settings($sessions, $settings)
                              . "parse correctly:\n"
                              . '<b><i>{error_message}</i></b>',
                          error_message => Glib::Markup::escape_text($err)));
+                $dialog->set_title(__('Connection Manager - Error'));
+                $dialog->set_icon_name(ICON_NAME);
                 $dialog->set_position('center-always');
                 $dialog->run();
                 $dialog->destroy();
@@ -1612,6 +1632,8 @@ sub load_settings($sessions, $settings)
                  __("Your terminal entry contains no reference\n"
                     . "to `{ssh-command}' nor `{ssh-command-args}'.\n"
                     . 'Reverting to the default setting.'));
+            $dialog->set_title(__('Connection Manager - Warning'));
+            $dialog->set_icon_name(ICON_NAME);
             $dialog->set_position('center-always');
             $dialog->run();
             $dialog->destroy();
@@ -1637,6 +1659,8 @@ sub load_settings($sessions, $settings)
                  __('Your editor entry contains no reference to '
                         . "`{file-name}'.\n"
                     . 'Reverting to the default setting.'));
+            $dialog->set_title(__('Connection Manager - Warning'));
+            $dialog->set_icon_name(ICON_NAME);
             $dialog->set_position('center-always');
             $dialog->run();
             $dialog->destroy();
@@ -1844,6 +1868,8 @@ sub yaml_data_to_objects($yaml_data, $rdp_index = undef, $defaults = undef)
              'close',
              __("Duplicate default session settings were found.\n"
                 . 'These have been ignored. Please rectify.'));
+        $dialog->set_title(__('Connection Manager - Warning'));
+        $dialog->set_icon_name(ICON_NAME);
         $dialog->set_position('center-always');
         $dialog->run();
         $dialog->destroy();
@@ -2072,6 +2098,8 @@ sub update_rdp_history($rdp_details)
                      . '<b><i>{error_message}</i></b>',
                  file_name => Glib::Markup::escape_text($rdp_history_file),
                  error_message => Glib::Markup::escape_text($!)));
+        $dialog->set_title(__('Connection Manager - Warning'));
+        $dialog->set_icon_name(ICON_NAME);
         $dialog->set_position('center-always');
         $dialog->run();
         $dialog->destroy();
