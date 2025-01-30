@@ -53,6 +53,7 @@ use Data::Dumper;
 use English;
 use Expect;
 use File::Basename;
+use File::Path qw(make_path);
 use File::Spec;
 use Glib qw(FALSE TRUE);
 use Gtk3 -init;
@@ -70,8 +71,8 @@ use constant ICON_NAME => 'preferences-system-login';
 
 # Constants for the name of the user's settings files.
 
-use constant USER_RDP_HISTORY_FILE => 'connection-manager-rdp-history.dat';
-use constant USER_SETTINGS_FILE    => 'connection-manager.yml';
+use constant USER_RDP_HISTORY_FILE => 'rdp-history.dat';
+use constant USER_SETTINGS_FILE    => 'settings.yml';
 
 # The general settings for the application.
 
@@ -292,6 +293,7 @@ EOF
 
 # Private routines.
 
+state sub config_file_full_path;
 state sub create_connections_menu;
 state sub create_options_menu;
 state sub create_password_dialog;
@@ -321,7 +323,6 @@ state sub process_custom_argument_tokens;
 state sub problem_dialog;
 state sub rdp_menu_entry_cb;
 state sub run_command;
-state sub settings_file_full_path;
 state sub settings_file_has_changed;
 state sub ssh_menu_entry_cb;
 state sub title_event_cb;
@@ -1095,7 +1096,7 @@ sub create_options_menu($sessions)
         ('activate',
          sub {
              my @args;
-             my $file_name = settings_file_full_path(USER_SETTINGS_FILE);
+             my $file_name = config_file_full_path(USER_SETTINGS_FILE);
              for my $arg (@{$settings->{editor}})
              {
                  if ($arg =~ m/$file_name_token_re/)
@@ -1500,8 +1501,8 @@ sub load_settings($sessions, $settings)
 
     # Attempt to open the settings file, if it doesn't exist then create it.
 
-    my $fname = settings_file_full_path(USER_SETTINGS_FILE);
-    if (-e $fname and -f $fname)
+    my $fname = config_file_full_path(USER_SETTINGS_FILE);
+    if (-f $fname)
     {
 
         # Read in and validate the YAML settings file.
@@ -1596,11 +1597,52 @@ sub load_settings($sessions, $settings)
     }
     else
     {
-        my $fh;
+        my ($err,
+            $fh);
+        my $dir_name = dirname($fname);
+        make_path($dir_name, {error => \$err });
+        if ($err and @$err)
+        {
+            my $errs;
+            foreach my $diag (@$err)
+            {
+                my ($file, $message) = %$diag;
+                if ($file eq '')
+                {
+                    $errs .= sprintf("General error: %s\n", $message);
+                }
+                else
+                {
+                    $errs .= sprintf("Problem creating `%s': %s\n",
+                                     $file,
+                                     $message);
+                }
+            }
+            chomp($errs);
+            problem_dialog
+                ('error',
+                 __x("The preferences directory `{directory}'\n"
+                         . "could not be created, the reasons given were:\n"
+                         . '<b><i>{error_message}</i></b>',
+                     directory => $dir_name,
+                     error_message => Glib::Markup::escape_text($errs)));
+
+            # We have dealt with the error so reset $! so that we don't get the
+            # general failure dialog pop up as well when we exit.
+
+            $! = 0;
+
+            return;
+
+        }
         if (defined($fh = IO::File->new($fname, 'w')))
         {
             $fh->print($setting_header);
             $fh->close();
+        }
+        else
+        {
+            return;
         }
         $$sessions = [];
     }
@@ -1953,7 +1995,7 @@ sub load_rdp_history()
     my ($fh,
         @list);
 
-    defined($fh = IO::File->new(settings_file_full_path(USER_RDP_HISTORY_FILE),
+    defined($fh = IO::File->new(config_file_full_path(USER_RDP_HISTORY_FILE),
                                 'r'))
         or return;
     while (my $line = $fh->getline())
@@ -1988,7 +2030,7 @@ sub update_rdp_history($rdp_details)
     my ($fh,
         %hit_map,
         @list);
-    my $rdp_history_file = settings_file_full_path(USER_RDP_HISTORY_FILE);
+    my $rdp_history_file = config_file_full_path(USER_RDP_HISTORY_FILE);
 
     # If the entry is already in the list then don't bother saving anything.
 
@@ -2040,7 +2082,7 @@ sub problem_dialog($severity, $message)
 
     my $dialog = Gtk3::MessageDialog->new_with_markup
         (undef, ['modal'], $severity, 'close', $message);
-    $dialog->set_title(__('Connection Manager - ' . ufirst($severity)));
+    $dialog->set_title(__('Connection Manager - ' . ucfirst($severity)));
     $dialog->set_icon_name(ICON_NAME);
     $dialog->set_position('center-always');
     $dialog->run();
@@ -2067,7 +2109,7 @@ sub problem_dialog($severity, $message)
 sub settings_file_has_changed()
 {
 
-    my $fname = settings_file_full_path(USER_SETTINGS_FILE);
+    my $fname = config_file_full_path(USER_SETTINGS_FILE);
     state $ctime = 0;
 
     if (-e $fname)
@@ -2086,9 +2128,10 @@ sub settings_file_has_changed()
 #
 ##############################################################################
 #
-#   Routine      - settings_file_full_path
+#   Routine      - config_file_full_path
 #
-#   Description  - Returns the the full path to the specified settings file.
+#   Description  - Returns the the full path to the specified configuration
+#                  file.
 #
 #   Data         - $file_name   : The name of the file to look for.
 #                  Return Value : The name of the user's settings file.
@@ -2097,12 +2140,14 @@ sub settings_file_has_changed()
 
 
 
-sub settings_file_full_path($file_name)
+sub config_file_full_path($file_name)
 {
 
-    return File::Spec->catfile($ENV{HOME}, '.config', $file_name)
+    return File::Spec->catfile
+        ($ENV{HOME}, '.config', 'connection-manager', $file_name)
         if (exists($ENV{HOME}));
-    return File::Spec->catfile($ENV{USERPROFILE}, '.config', $file_name)
+    return File::Spec->catfile
+        ($ENV{USERPROFILE}, '.config', 'connection-manager', $file_name)
         if (exists($ENV{USERPROFILE}));
     return $file_name;
 
