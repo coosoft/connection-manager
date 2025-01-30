@@ -71,8 +71,9 @@ use constant ICON_NAME => 'preferences-system-login';
 
 # Constants for the name of the user's settings files.
 
-use constant USER_RDP_HISTORY_FILE => 'rdp-history.dat';
 use constant USER_SETTINGS_FILE    => 'settings.yml';
+use constant USER_RDP_HISTORY_FILE => 'rdp-history.dat';
+use constant USER_VNC_HISTORY_FILE => 'vnc-history.dat';
 
 # The general settings for the application.
 
@@ -293,11 +294,13 @@ EOF
 
 # Private routines.
 
+state sub adhoc_vnc_menu_entry_cb;
 state sub config_file_full_path;
 state sub create_connections_menu;
 state sub create_options_menu;
 state sub create_password_dialog;
 state sub create_rdp_connection_dialog;
+state sub create_vnc_connection_dialog;
 state sub find_rdp_session_entry;
 state sub handle_rdp_menu_entry;
 state sub iterator($hash_ref)
@@ -310,7 +313,7 @@ state sub iterator($hash_ref)
                return;
            };
 }
-state sub load_rdp_history;
+state sub load_history;
 state sub load_settings;
 state sub logger($format, @args)
 {
@@ -326,7 +329,7 @@ state sub run_command;
 state sub settings_file_has_changed;
 state sub ssh_menu_entry_cb;
 state sub title_event_cb;
-state sub update_rdp_history;
+state sub update_history;
 state sub vnc_menu_entry_cb;
 state sub vnc_path;
 state sub yaml_data_to_objects;
@@ -959,6 +962,62 @@ sub handle_rdp_menu_entry($details)
 #
 ##############################################################################
 #
+#   Routine      - adhoc_vnc_menu_entry_cb
+#
+#   Description  - Handle starting an adhoc VNC session where we ask for the
+#                  details.
+#
+#   Data         - $widget  : The widget object that received the signal.
+#
+##############################################################################
+
+
+
+sub adhoc_vnc_menu_entry_cb($widget)
+{
+
+    my $input;
+    my %details = %{$settings->{vnc_defaults}};
+
+    # Ask for the connection details.
+
+    my $dialog = create_vnc_connection_dialog(\$input);
+    $dialog->run();
+    $dialog->destroy();
+    while (Gtk3::events_pending())
+    {
+        Gtk3::main_iteration();
+    }
+    if (defined($input))
+    {
+        if ($input =~ m/^(?:([^\\]+)\\)?([^:]+)(?::(\d+))?$/)
+        {
+            my ($profile, $host, $port) = ($1, $2, $3);
+            $details{profile} = $profile if (defined($profile));
+            $details{host} = $host;
+            $details{port} = $port if (defined($port));
+        }
+        else
+        {
+            problem_dialog('warning',
+                       __('The information entered is not a VNC endpoint.'));
+            return 1;
+        }
+    }
+
+    # Only proceed if we are good to go.
+
+    if (defined($details{host}))
+    {
+        vnc_menu_entry_cb($widget, \%details)
+    }
+
+    return 0;
+
+}
+#
+##############################################################################
+#
 #   Routine      - create_connections_menu
 #
 #   Description  - Creates and populates a menu with the specified session
@@ -1083,11 +1142,7 @@ sub create_options_menu($sessions)
 
     $menu_item = Gtk3::MenuItem->new(__('_TigerVNC'));
     $menu->append($menu_item);
-    $menu_item->signal_connect
-        ('activate',
-         sub {
-             run_command('xtigervncviewer');
-         });
+    $menu_item->signal_connect('activate', \&adhoc_vnc_menu_entry_cb);
     $menu_item->show();
 
     $menu_item = Gtk3::MenuItem->new(__('_Edit Preferences'));
@@ -1168,7 +1223,7 @@ sub create_rdp_connection_dialog($input)
     $label->set_alignment(1, 0.5);
     $table->attach_defaults($label, 0, 1, 0, 1);
     $combobox = Gtk3::ComboBoxText->new_with_entry();
-    foreach my $entry (load_rdp_history())
+    foreach my $entry (load_history('RDP'))
     {
         $combobox->append_text($entry);
     }
@@ -1200,7 +1255,92 @@ sub create_rdp_connection_dialog($input)
              if ($button eq 'ok')
              {
                  $$input = $entry->get_text();
-                 update_rdp_history($$input);
+                 update_history('RDP', $$input);
+             }
+         });
+    $table->attach_defaults($combobox, 1, 2, 0, 1);
+    $vbox->pack_start($table, 0, 0, 4);
+    $vbox->show_all();
+
+    return $dialog;
+
+}
+#
+##############################################################################
+#
+#   Routine      - create_vnc_connection_dialog
+#
+#   Description  - Create a dialog that asks for a VNC profile, host and port
+#                  and return it to the caller.
+#
+#   Data         - $input       : A reference to a variable that is to contain
+#                                 the user's input.
+#                  Return Value : The created Gtk3::Dialog widget.
+#
+##############################################################################
+
+
+
+sub create_vnc_connection_dialog($input)
+{
+
+    my ($combobox,
+        $dialog,
+        $entry,
+        $label,
+        $table,
+        $vbox);
+
+    $dialog = Gtk3::Dialog->new(__('VNC Connection Details'),
+                                undef,
+                                ['modal'],
+                                'gtk-cancel' => 'cancel',
+                                'gtk-ok' => 'ok');
+    $dialog->set_icon_name(ICON_NAME);
+    $dialog->set_default_response('ok');
+    $dialog->set_response_sensitive ('ok', FALSE);
+    $dialog->set_position('center-always');
+    $dialog->set_resizable(FALSE);
+    $vbox = $dialog->get_content_area();
+    $vbox->set_border_width(5);
+    $table = Gtk3::Table->new(1, 2, FALSE);
+    $label = Gtk3::Label->new(__('Connection details '
+                                 . '([profile:]host[:port]):'));
+    $label->set_alignment(1, 0.5);
+    $table->attach_defaults($label, 0, 1, 0, 1);
+    $combobox = Gtk3::ComboBoxText->new_with_entry();
+    foreach my $entry (load_history('VNC'))
+    {
+        $combobox->append_text($entry);
+    }
+    $entry = $combobox->get_child();
+    $entry->set_text('');
+    $entry->set_width_chars(40);
+    $entry->set_activates_default(TRUE);
+    $entry->signal_connect
+        ('changed',
+         sub {
+             my $text = $entry->get_text;
+             if ($entry->get_text()
+                 =~ m/^(?:[-_.$!a-zA-Z0-9]+\\)?  # Optional profile name.
+                      [-_.a-zA-Z0-9]+            # Mandatory host name.
+                      (?::\d+)?$/x)              # Optional port number.
+             {
+                 $dialog->set_response_sensitive('ok', TRUE);
+             }
+             else
+             {
+                 $dialog->set_response_sensitive('ok', FALSE);
+             }
+         });
+    $dialog->signal_connect
+        ('response',
+         sub {
+             my ($widget, $button) = @_;
+             if ($button eq 'ok')
+             {
+                 $$input = $entry->get_text();
+                 update_history('VNC', $$input);
              }
          });
     $table->attach_defaults($combobox, 1, 2, 0, 1);
@@ -1978,32 +2118,35 @@ sub process_custom_argument_tokens($args)
 #
 ##############################################################################
 #
-#   Routine      - load_rdp_history
+#   Routine      - load_history
 #
-#   Description  - Returns the list of previously saved ad-hoc RDP connection
-#                  details entered into the RDP connection dialog.
+#   Description  - Returns the list of previously saved ad-hoc connection
+#                  details entered into an RDP or VNC connection dialog.
 #
-#   Data         - Return Value : A list of connection details.
+#   Data         - $type        : Either 'RDP' or 'VNC'.
+#                  Return Value : A list of connection details.
 #
 ##############################################################################
 
 
 
-sub load_rdp_history()
+sub load_history($type)
 {
 
-    my ($fh,
+    my ($history_file,
         @list);
 
-    defined($fh = IO::File->new(config_file_full_path(USER_RDP_HISTORY_FILE),
-                                'r'))
+    defined($history_file =
+            IO::File->new(config_file_full_path(($type eq 'RDP')
+                                                ? USER_RDP_HISTORY_FILE
+                                                : USER_VNC_HISTORY_FILE)))
         or return;
-    while (my $line = $fh->getline())
+    while (my $line = $history_file->getline())
     {
         chomp($line);
         push(@list, $line) if ($line !~ m/^\s*#/);
     }
-    $fh->close();
+    $history_file->close();
 
     return @list;
 
@@ -2011,49 +2154,53 @@ sub load_rdp_history()
 #
 ##############################################################################
 #
-#   Routine      - update_rdp_history
+#   Routine      - update_history
 #
-#   Description  - Updates the saved list of ad-hoc RDP connection details
-#                  that have been entered into the RDP connection dialog or
-#                  its history.
+#   Description  - Updates the saved list of ad-hoc connection details that
+#                  have been entered into or selected from an RDP or VNC
+#                  connection dialog.
 #
-#   Data         - $rdp_details : Newly entered or selected details for an RDP
-#                                 connection.
+#   Data         - $type    : Either 'RDP' or 'VNC'.
+#                  $details : Newly entered or selected details for a
+#                             connection.
 #
 ##############################################################################
 
 
 
-sub update_rdp_history($rdp_details)
+sub update_history($type, $details)
 {
 
     my ($fh,
         %hit_map,
         @list);
-    my $rdp_history_file = config_file_full_path(USER_RDP_HISTORY_FILE);
+    my $history_file = config_file_full_path(($type eq 'RDP')
+                                             ? USER_RDP_HISTORY_FILE
+                                             : USER_VNC_HISTORY_FILE);
 
     # If the entry is already in the list then don't bother saving anything.
 
-    @list = load_rdp_history();
+    @list = load_history($type);
     @hit_map{@list} = undef;
-    return if (exists($hit_map{$rdp_details}));
+    return if (exists($hit_map{$details}));
 
     # Ok it's changed so save it.
 
-    if (not defined($fh = IO::File->new($rdp_history_file, 'w')))
+    if (not defined($fh = IO::File->new($history_file, 'w')))
     {
         problem_dialog
             ('warning',
-             __x("Cannot save the RDP connection history to\n"
+             __x("Cannot save the {type} connection history to\n"
                      . "{file_name},\nthe system gave:\n"
                      . '<b><i>{error_message}</i></b>',
-                 file_name => Glib::Markup::escape_text($rdp_history_file),
+                 type => $type,
+                 file_name => Glib::Markup::escape_text($history_file),
                  error_message => Glib::Markup::escape_text($!)));
         return;
     }
 
     $fh->print("# DO NOT EDIT - This file will be overwritten.\n");
-    unshift(@list, $rdp_details);
+    unshift(@list, $details);
     splice(@list, $settings->{history_size});
     foreach my $entry (@list)
     {
