@@ -318,6 +318,7 @@ state sub logger($format, @args)
 state sub patch_up_syntax_table;
 state sub ping_host;
 state sub process_custom_argument_tokens;
+state sub problem_dialog;
 state sub rdp_menu_entry_cb;
 state sub run_command;
 state sub settings_file_full_path;
@@ -372,21 +373,11 @@ our $VERSION = '1.0';
     {
         if ($!)
         {
-            my $dialog;
-            my $err = $!;
-            $dialog = Gtk3::MessageDialog->new_with_markup
-                (undef,
-                 ['modal'],
-                 'error',
-                 'close',
-                 __x('Your preferences could not be loaded, the reason given '
-                         . "was:\n<b><i>{error_message}</i></b>",
-                     error_message => Glib::Markup::escape_text($err)));
-            $dialog->set_title(__('Connection Manager - Error'));
-            $dialog->set_icon_name(ICON_NAME);
-            $dialog->set_position('center-always');
-            $dialog->run();
-            $dialog->destroy();
+            problem_dialog('error',
+                           __x('Your preferences could not be loaded, the '
+                                   . "reason given was:\n"
+                                   . '<b><i>{error_message}</i></b>',
+                               error_message => Glib::Markup::escape_text($!)));
         }
         exit(1);
     }
@@ -415,17 +406,8 @@ our $VERSION = '1.0';
         }
         else
         {
-            my $dialog = Gtk3::MessageDialog->new
-                (undef,
-                 ['modal'],
-                 'error',
-                 'close',
-                 __('Internal error: Invalid --rdp argument.'));
-            $dialog->set_title(__('Connection Manager - Error'));
-            $dialog->set_icon_name(ICON_NAME);
-            $dialog->set_position('center-always');
-            $dialog->run();
-            $dialog->destroy();
+            problem_dialog
+                ('error', __('Internal error: Invalid --rdp argument.'));
             $exit_code = 1;
         }
 
@@ -556,18 +538,10 @@ sub vnc_menu_entry_cb($widget, $details)
                                         $details->{profile} . '.tigervnc');
     if (not defined($fh = IO::File->new($profile_file, 'r')))
     {
-        my $dialog = Gtk3::MessageDialog->new
-            (undef,
-             ['modal'],
-             'warning',
-             'close',
-             __x("TigerVNC profile file\n`{profile}'\ncannot be read.",
-                 profile => $profile_file));
-        $dialog->set_title(__('Connection Manager - Warning'));
-        $dialog->set_icon_name(ICON_NAME);
-        $dialog->set_position('center-always');
-        $dialog->run();
-        $dialog->destroy();
+        problem_dialog('warning',
+                       __x("TigerVNC profile file\n`{profile}'\n"
+                               .'cannot be read.',
+                           profile => $profile_file));
         return;
     }
 
@@ -966,7 +940,7 @@ sub handle_rdp_menu_entry($details)
         my $msg;
         if (defined($warning_msg))
         {
-            $msg = $warning_msg;
+            $msg = Glib::Markup::escape_text($warning_msg);
         }
         else
         {
@@ -974,13 +948,7 @@ sub handle_rdp_menu_entry($details)
             $msg = __x("Oops, something went wrong:\n<b><i>{output}</i></b>",
                        output => Glib::Markup::escape_text($output));
         }
-        my $dialog = Gtk3::MessageDialog->new_with_markup
-            (undef, ['modal'], 'warning', 'close', $msg);
-        $dialog->set_title(__('Connection Manager - Warning'));
-        $dialog->set_icon_name(ICON_NAME);
-        $dialog->set_position('center-always');
-        $dialog->run();
-        $dialog->destroy();
+        problem_dialog('warning', $msg);
         return 1;
     }
 
@@ -1416,20 +1384,12 @@ sub run_command(@cmd)
         $! = WEXITSTATUS($CHILD_ERROR)
             if (defined($CHILD_ERROR) && WIFEXITED($CHILD_ERROR));
         my $prog = (split(/ /, $cmd[0]))[0];
-        my $dialog = Gtk3::MessageDialog->new_with_markup
-            (undef,
-             ['modal'],
-             'warning',
-             'close',
-             __x("The {name} subprocess could not start,\n"
-                     . "the system gave:\n<b><i>{error_message}</i></b>",
-                 name => Glib::Markup::escape_text($prog),
-                 error_message => Glib::Markup::escape_text($!)));
-        $dialog->set_title(__('Connection Manager - Warning'));
-        $dialog->set_icon_name(ICON_NAME);
-        $dialog->set_position('center-always');
-        $dialog->run();
-        $dialog->destroy();
+        problem_dialog('warning',
+                       __x("The {name} subprocess could\n"
+                               . "not start, the system gave:\n"
+                               . '<b><i>{error_message}</i></b>',
+                           name => Glib::Markup::escape_text($prog),
+                           error_message => Glib::Markup::escape_text($!)));
     }
 
     # Start ignoring SIGCHLD again and reap any outstanding subprocesses.
@@ -1475,20 +1435,11 @@ sub ping_host($host, $port, $timeout)
     {
         my $err = $!;
         $err = 'Unknown hostname' if ($! == EINVAL);
-        my $dialog = Gtk3::MessageDialog->new_with_markup
-            (undef,
-             ['modal'],
-             'warning',
-             'close',
-             __x("Cannot connect to {host}, the reason given was:\n"
-                     . '<b><i>{error_message}</i></b>',
-                 host => $host,
-                 error_message => Glib::Markup::escape_text($err)));
-        $dialog->set_title(__('Connection Manager - Warning'));
-        $dialog->set_icon_name(ICON_NAME);
-        $dialog->set_position('center-always');
-        $dialog->run();
-        $dialog->destroy();
+        problem_dialog('warning',
+                       __x("Cannot connect to {host}, the reason given was:\n"
+                               . '<b><i>{error_message}</i></b>',
+                           host => $host,
+                           error_message => Glib::Markup::escape_text($err)));
     }
 
     return;
@@ -1578,23 +1529,14 @@ sub load_settings($sessions, $settings)
             }
             if ($err)
             {
-                my $dialog;
                 chomp($err);
                 $err =~ s/ at \S+ line \d+.$/./g;
-                $dialog = Gtk3::MessageDialog->new_with_markup
-                    (undef,
-                     ['modal'],
-                     'error',
-                     'close',
+                problem_dialog
+                    ('error',
                      __x('Your preferences could not be loaded as it failed to '
                              . "parse correctly:\n"
                              . '<b><i>{error_message}</i></b>',
                          error_message => Glib::Markup::escape_text($err)));
-                $dialog->set_title(__('Connection Manager - Error'));
-                $dialog->set_icon_name(ICON_NAME);
-                $dialog->set_position('center-always');
-                $dialog->run();
-                $dialog->destroy();
 
                 # We have dealt with the error so reset $! so that we don't get
                 # the general failure dialog pop up as well when we exit.
@@ -1623,20 +1565,10 @@ sub load_settings($sessions, $settings)
         }
         unless ($found)
         {
-            my $dialog;
-            $dialog = Gtk3::MessageDialog->new
-                (undef,
-                 ['modal'],
-                 'warning',
-                 'close',
-                 __("Your terminal entry contains no reference\n"
-                    . "to `{ssh-command}' nor `{ssh-command-args}'.\n"
-                    . 'Reverting to the default setting.'));
-            $dialog->set_title(__('Connection Manager - Warning'));
-            $dialog->set_icon_name(ICON_NAME);
-            $dialog->set_position('center-always');
-            $dialog->run();
-            $dialog->destroy();
+            problem_dialog('warning',
+                           __("Your terminal entry contains no reference\n"
+                              . "to `{ssh-command}' nor `{ssh-command-args}'.\n"
+                              . 'Reverting to the default setting.'));
             $$settings->{terminal} = \@terminal;
         }
         $found = 0;
@@ -1650,20 +1582,10 @@ sub load_settings($sessions, $settings)
         }
         unless ($found)
         {
-            my $dialog;
-            $dialog = Gtk3::MessageDialog->new
-                (undef,
-                 ['modal'],
-                 'warning',
-                 'close',
-                 __('Your editor entry contains no reference to '
-                        . "`{file-name}'.\n"
-                    . 'Reverting to the default setting.'));
-            $dialog->set_title(__('Connection Manager - Warning'));
-            $dialog->set_icon_name(ICON_NAME);
-            $dialog->set_position('center-always');
-            $dialog->run();
-            $dialog->destroy();
+            problem_dialog('warning',
+                           __('Your editor entry contains no reference to '
+                              . "`{file-name}'.\n"
+                              . 'Reverting to the default setting.'));
             $$settings->{editor} = \@editor;
         }
 
@@ -1860,19 +1782,9 @@ sub yaml_data_to_objects($yaml_data, $rdp_index = undef, $defaults = undef)
 
     if ($duplicate_defaults)
     {
-        my $dialog;
-        $dialog = Gtk3::MessageDialog->new
-            (undef,
-             ['modal'],
-             'warning',
-             'close',
-             __("Duplicate default session settings were found.\n"
-                . 'These have been ignored. Please rectify.'));
-        $dialog->set_title(__('Connection Manager - Warning'));
-        $dialog->set_icon_name(ICON_NAME);
-        $dialog->set_position('center-always');
-        $dialog->run();
-        $dialog->destroy();
+        problem_dialog('warning',
+                       __("Duplicate default session settings were found.\n"
+                          . 'These have been ignored. Please rectify.'));
     }
 
     return \@menu_entries;
@@ -2088,21 +2000,13 @@ sub update_rdp_history($rdp_details)
 
     if (not defined($fh = IO::File->new($rdp_history_file, 'w')))
     {
-        my $dialog = Gtk3::MessageDialog->new_with_markup
-            (undef,
-             ['modal'],
-             'warning',
-             'close',
+        problem_dialog
+            ('warning',
              __x("Cannot save the RDP connection history to\n"
                      . "{file_name},\nthe system gave:\n"
                      . '<b><i>{error_message}</i></b>',
                  file_name => Glib::Markup::escape_text($rdp_history_file),
                  error_message => Glib::Markup::escape_text($!)));
-        $dialog->set_title(__('Connection Manager - Warning'));
-        $dialog->set_icon_name(ICON_NAME);
-        $dialog->set_position('center-always');
-        $dialog->run();
-        $dialog->destroy();
         return;
     }
 
@@ -2114,6 +2018,35 @@ sub update_rdp_history($rdp_details)
         $fh->print($entry . "\n");
     }
     $fh->close();
+
+}
+#
+##############################################################################
+#
+#   Routine      - problem_dialog
+#
+#   Description  - Displays the given message in a warning or error diaglog.
+#
+#   Data         - $severity : A string containing `warning' or `error'.
+#                  $message  : A string containing the message in markup
+#                              format that is to be displayed.
+#
+##############################################################################
+
+
+
+sub problem_dialog($severity, $message)
+{
+
+    my $dialog = Gtk3::MessageDialog->new_with_markup
+        (undef, ['modal'], $severity, 'close', $message);
+    $dialog->set_title(__('Connection Manager - ' . ufirst($severity)));
+    $dialog->set_icon_name(ICON_NAME);
+    $dialog->set_position('center-always');
+    $dialog->run();
+    $dialog->destroy();
+
+    return;
 
 }
 #
