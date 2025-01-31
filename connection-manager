@@ -320,7 +320,6 @@ state sub logger($format, @args)
     STDERR->printf("%s\n", sprintf($format, @args));
     return;
 }
-state sub patch_up_syntax_table;
 state sub ping_host;
 state sub process_custom_argument_tokens;
 state sub problem_dialog;
@@ -362,10 +361,16 @@ our $VERSION = '1.0';
 
     $SIG{CHLD} = 'IGNORE';
 
-    # Patch up the syntax tree to cope with recursive menu definitions and
-    # duplicates.
+    # Patch up the syntax tree to cope with recursive menu definitions.
 
-    patch_up_syntax_table();
+    foreach my $entry (@{$settings_syntax_tree{'m:menu'}})
+    {
+        if (exists($entry->{'m:menu'}))
+        {
+            $entry->{'m:menu'}->{'m:items'} = $settings_syntax_tree{'m:menu'};
+            last;
+        }
+    }
 
     # Prime the update checker.
 
@@ -1979,62 +1984,6 @@ sub yaml_data_to_objects($yaml_data, $rdp_index = undef, $defaults = undef)
     }
 
     return \@menu_entries;
-
-}
-#
-##############################################################################
-#
-#   Routine      - patch_up_syntax_table
-#
-#   Description  - Patch the syntax table to allow for recursive menu
-#                  definitions and build up the session defaults records from
-#                  the main session definitions, so as to avoid lengthy
-#                  duplication.
-#
-#   Data         - None.
-#
-##############################################################################
-
-
-
-sub patch_up_syntax_table()
-{
-
-    # Recursive menu definitions.
-
-    foreach my $entry (@{$settings_syntax_tree{'m:menu'}})
-    {
-        if (exists($entry->{'m:menu'}))
-        {
-            $entry->{'m:menu'}->{'m:items'} = $settings_syntax_tree{'m:menu'};
-            last;
-        }
-    }
-
-    # Defaults duplication (may expand in the future from just RDP).
-
-    my $search =
-        sub {
-            my $type = $_[0];
-            foreach my $entry (@{$settings_syntax_tree{'m:menu'}})
-            {
-                return $entry->{"m:${type}"} if (exists($entry->{"m:${type}"}));
-            }
-        };
-    foreach my $type ('rdp')
-    {
-        my %defaults;
-        my $record = $search->($type);
-        my $iter = iterator($search->($type));
-        while (my ($key, $value) = $iter->())
-        {
-            $defaults{$key} = $value unless ($key =~ m/^(?:m:name|m:host)$/);
-        }
-        push(@{$settings_syntax_tree{'m:menu'}},
-             {"m:${type}_defaults" => \%defaults});
-    }
-
-    return;
 
 }
 #
