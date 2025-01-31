@@ -834,7 +834,7 @@ sub handle_rdp_menu_entry($details)
         my $cmd_handle = Expect->new();
         $cmd_handle->log_group(1);
         $cmd_handle->log_stdout(($settings->{debug}) ? 1 : 0);
-        $cmd_handle->log_file(sub { $output .= $_[0]; });
+        $cmd_handle->log_file(sub { $output .= $_[0]; return; });
         $cmd_handle->spawn(@args) or die("Cannot spawn command: $!");
         $cmd_handle->
             expect(undef,
@@ -1031,7 +1031,7 @@ sub adhoc_vnc_menu_entry_cb($widget)
 
     if (defined($details{host}))
     {
-        vnc_menu_entry_cb($widget, \%details)
+        vnc_menu_entry_cb($widget, \%details);
     }
 
     return 0;
@@ -1212,6 +1212,7 @@ sub create_options_menu($sessions)
         ('activate',
          sub {
              Gtk3->main_quit();
+             return;
          });
     $menu_item->show();
 
@@ -1289,6 +1290,7 @@ sub create_rdp_connection_dialog($input)
              {
                  $dialog->set_response_sensitive('ok', FALSE);
              }
+             return;
          });
     $dialog->signal_connect
         ('response',
@@ -1299,6 +1301,7 @@ sub create_rdp_connection_dialog($input)
                  $$input = $entry->get_text();
                  update_history('RDP', $$input);
              }
+             return;
          });
     $hbox->pack_start($combobox, TRUE, TRUE, 0);
     $vbox->pack_start($hbox, TRUE, TRUE, 0);
@@ -1377,6 +1380,7 @@ sub create_vnc_connection_dialog($input)
              {
                  $dialog->set_response_sensitive('ok', FALSE);
              }
+             return;
          });
     $dialog->signal_connect
         ('response',
@@ -1387,6 +1391,7 @@ sub create_vnc_connection_dialog($input)
                  $$input = $entry->get_text();
                  update_history('VNC', $$input);
              }
+             return;
          });
     $hbox->pack_start($combobox, TRUE, TRUE, 0);
     $vbox->pack_start($hbox, TRUE, TRUE, 0);
@@ -1458,6 +1463,7 @@ sub create_password_dialog($details, $password)
              {
                  $dialog->set_response_sensitive('ok', FALSE);
              }
+             return;
          });
     $dialog->signal_connect
         ('response',
@@ -1467,6 +1473,7 @@ sub create_password_dialog($details, $password)
              {
                  $$password = $entry->get_text();
              }
+             return;
          });
     $hbox->pack_start($entry, TRUE, TRUE, 0);
     $vbox->pack_start($hbox, TRUE, TRUE, 0);
@@ -2257,6 +2264,8 @@ sub update_history($type, $details)
         $fh->print($entry . "\n");
     }
     $fh->close();
+
+    return;
 
 }
 #
