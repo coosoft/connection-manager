@@ -91,6 +91,8 @@ my $ssh_cmd_token_re = qr/\{ssh-command\}/;
 my $ssh_cmd_tokens_re = qr/\{(?:ssh-command|ssh-command-args)\}/;
 my $window_title_token_re = qr/\{title\}/;
 
+# Syntax trees.
+
 my @host =
     ('l:choice_value',
      'R:hostname',
@@ -172,118 +174,132 @@ my %settings_syntax_tree =
                {'m:name'      => 'R:printable',
                 'm:items'     => undef}}]);
 
-my $setting_header = <<'EOF';
-# Notes:
-# - Defaults are shown with *.
-# - One can use the following tokens when specifying a terminal application:
-#   - `{ssh-command}'      : Expands to a single string containing the complete
-#                            ssh command.
-#   - `{ssh-command-args}' : Expands to a list of strings, one for each argument
-#                            of the ssh command. This token only works as a
-#                            dedicated entry in a list of strings (i.e.
-#                            "freddy{ssh-command-args}" won't be recognised).
-#   - `{title}'            : Expands to contain one string, containing a
-#                            meaningful title for a terminal window.
-#   One of the ssh tokens must be supplied for the terminal entry to be valid.
-# - One can use the following tokens when specifying a text editor application:
-#   - `{file-name}' : Expands to a single string containing the name of the file
-#                     that is to be edited.
-#   The file name token must be supplied for the editor entry to be valid.
-# - In the examples below some default values are calculated at runtime. For
-#   example, default desktop sizes and user names. Some meanings:
-#   - `<Not Specified>' : No option is specified to the supporting application
-#                         and so its own default setting applies.
-#   - `option1|option2' : Details the options that can be used for that setting.
-# - The custom_arguments field is supported for RDP and SSH sessions (VNC
-#   sessions use TigerVNC profiles so any custom settings can go into those
-#   profiles). This gives the user the opportunity to add additional switches
-#   that aren't natively supported by this application, such as SSH tunnels or
-#   SSH key identities. If you so wish you can make use of the following tokens:
-#   - `{desktop-width}'         : The width of the desktop in pixels.
-#   - `{desktop-height}'        : The height of the desktop in pixels.
-#   - `{desktop-usable-width}'  : The usable width of the desktop in pixels,
-#                                 taking into account panels (work area).
-#   - `{desktop-usable-height}' : The usable height of the desktop in pixels,
-#                                 taking into account panels (work area).
-#
-# config_version: 1.0
-# settings:
-#   terminal: ["konsole",                         *
-#              "-p",
-#              "RemoteTabTitleFormat={title}",
-#              "-e",
-#              "{ssh-command-args}"]
-#   editor: ["vim", "{file-name}"                 *
-#   rdp_defaults:
-#   ssh_defaults:
-#   vnc_defaults:
-#     The above `*_defaults' records can be used to override the built in
-#     default values for assorted fields within those connection types. With the
-#     exception of the `name' and `host' fields all of the others are valid.
-#     Please look at the RDP, SSH and VNC menu entries below to find out the
-#     field names and their built in default values.
-#   tigervnc_profile_path: ~/.vnc                 *
-#   history_size: 20                              *
-#   debug: false                                  *
-#
-# menu:
-#   - separator:
-#       text: null                                *
-#       draw_line: false                          * # True if no `text'.
-#   - rdp:
-#       name:
-#       host:
-#       port: 3389                                *
-#       user: <Your User Name>                    *
-#       domain_name: <Not Specified>              *
-#       window_mode: maximised-no-boarders        *
-#                    fullscreen|maximised-no-boarders|<Width>x<Height>
-#       colour_depth: 32                          *
-#       compression_level: <Not Specified>        *
-#       disk_shares: <Not Specified>              *
-#       network: <Not Specified>                  *
-#                auto|broadband|broadband-high|broadband-low|lan|modem|wan
-#       tls_security_level: <Not Specified>       *
-#       admin: false                              *
-#       bitmap_cache: false                       *
-#       compositor: true                          *
-#       compress: true                            *
-#       home_drive: false                         *
-#       ignore_certs: false                       *
-#       keyboard_grab: true                       *
-#       menu_animations: true                     *
-#       microphone: false                         *
-#       share_clipboard: true                     *
-#       smooth_fonts: true                        *
-#       sound: false                              *
-#       themes: true                              *
-#       toolbar: false                            *
-#       wallpaper: true                           *
-#       window_drag: true                         *
-#       custom_arguments: []                      *
-#   - vnc:
-#       name: Linux Desktop
-#       host: linux-dev.work.org
-#       port: 1                                   * # VNC port not socket.
-#       profile: default                          * # Name of TigerVNC profile.
-#   - ssh:
-#       name: Linux Desktop
-#       host: linux-dev.work.org
-#       port: 22                                  *
-#       user: fblogs                              *
-#       keep_alive: false                         *
-#       x11_tunnel: false                         *
-#       custom_arguments: []                      *
-#   - menu:
-#       name: Lab Virtual Machines
-#       items:
-#         - ssh:
-#             name: Play Pen
-#             host: play.lab.home.org
-#             user: system
-#         - .
-#         - .
-#         - .
+# Help text for the settimgs file.
+
+my $settings_help = <<'EOF';
+Settings File Help
+==================
+
+General points:
+- The settings are formatted as YAML.
+- Defaults are shown with *.
+- One can use the following tokens when specifying a terminal application:
+  - `{ssh-command}'      : Expands to a single string containing the complete
+                           ssh command.
+  - `{ssh-command-args}' : Expands to a list of strings, one for each argument
+                           of the ssh command. This token only works as a
+                           dedicated entry in a list of strings (i.e.
+                           "freddy{ssh-command-args}" won't be recognised).
+  - `{title}'            : Expands to contain one string, containing a
+                           meaningful title for a terminal window.
+  One of the ssh tokens must be supplied for the terminal entry to be valid.
+- One can use the following tokens when specifying a text editor application:
+  - `{file-name}' : Expands to a single string containing the name of the file
+                    that is to be edited.
+  The file name token must be supplied for the editor entry to be valid.
+- In the examples below some default values are calculated at runtime. For
+  example, default desktop sizes and user names. Some meanings:
+  - `<Not Specified>' : No option is specified to the supporting application
+                        and so its own default setting applies.
+  - `option1|option2' : Details the options that can be used for that setting.
+- The custom_arguments field is supported for RDP and SSH sessions (VNC
+  sessions use TigerVNC profiles so any custom settings can go into those
+  profiles). This gives the user the opportunity to add additional switches
+  that aren't natively supported by this application, such as SSH tunnels or
+  SSH key identities. If you so wish you can make use of the following tokens:
+  - `{desktop-width}'         : The width of the desktop in pixels.
+  - `{desktop-height}'        : The height of the desktop in pixels.
+  - `{desktop-usable-width}'  : The usable width of the desktop in pixels,
+                                taking into account panels (work area).
+  - `{desktop-usable-height}' : The usable height of the desktop in pixels,
+                                taking into account panels (work area).
+
+A fully populated set of settimgs are shown below the line.
+--------------------------------------------------------------------------------
+config_version: 1.0
+settings:
+  terminal: ["konsole",                         *
+             "-p",
+             "RemoteTabTitleFormat={title}",
+             "-e",
+             "{ssh-command-args}"]
+  editor: ["vim", "{file-name}"                 *
+  rdp_defaults:
+  ssh_defaults:
+  vnc_defaults:
+    The above `*_defaults' records can be used to override the built in
+    default values for assorted fields within those connection types. With the
+    exception of the `name' and `host' fields all of the others are valid.
+    Please look at the RDP, SSH and VNC menu entries below to find out the
+    field names and their built in default values.
+  tigervnc_profile_path: ~/.vnc                 *
+  history_size: 20                              *
+  debug: false                                  *
+menu:
+  - separator:
+      text: null                                *
+      draw_line: false                          * # True if no `text'.
+  - rdp:
+      name:
+      host:
+      port: 3389                                *
+      user: <Your User Name>                    *
+      domain_name: <Not Specified>              *
+      window_mode: maximised-no-boarders        *
+                   fullscreen|maximised-no-boarders|<Width>x<Height>
+      colour_depth: 32                          *
+      compression_level: <Not Specified>        *
+      disk_shares: <Not Specified>              *
+      network: <Not Specified>                  *
+               auto|broadband|broadband-high|broadband-low|lan|modem|wan
+      tls_security_level: <Not Specified>       *
+      admin: false                              *
+      bitmap_cache: false                       *
+      compositor: true                          *
+      compress: true                            *
+      home_drive: false                         *
+      ignore_certs: false                       *
+      keyboard_grab: true                       *
+      menu_animations: true                     *
+      microphone: false                         *
+      share_clipboard: true                     *
+      smooth_fonts: true                        *
+      sound: false                              *
+      themes: true                              *
+      toolbar: false                            *
+      wallpaper: true                           *
+      window_drag: true                         *
+      custom_arguments: []                      *
+  - vnc:
+      name: Linux Desktop
+      host: linux-dev.work.org
+      port: 1                                   * # VNC port not socket.
+      profile: default                          * # Name of TigerVNC profile.
+  - ssh:
+      name: Linux Desktop
+      host: linux-dev.work.org
+      port: 22                                  *
+      user: fblogs                              *
+      keep_alive: false                         *
+      x11_tunnel: false                         *
+      custom_arguments: []                      *
+  - menu:
+      name: Lab Virtual Machines
+      items:
+        - ssh:
+            name: Play Pen
+            host: play.lab.home.org
+            user: system
+        - .
+        - .
+        - .
+EOF
+
+# The default contents of a new settings file.
+
+my $new_settings_contents = <<'EOF';
+# Use the Help menu option to get information on the syntax of this file.
+
 config_version: 1.0
 menu:
   - separator:
@@ -297,6 +313,7 @@ EOF
 state sub adhoc_vnc_menu_entry_cb;
 state sub config_file_full_path;
 state sub create_connections_menu;
+state sub create_help_dialog;
 state sub create_options_menu;
 state sub create_password_dialog;
 state sub create_rdp_connection_dialog;
@@ -1169,6 +1186,23 @@ sub create_options_menu($sessions)
                  }
              }
              run_command(@args);
+             return;
+         });
+    $menu_item->show();
+
+    $menu_item = Gtk3::MenuItem->new(__('_Help'));
+    $menu->append($menu_item);
+    $menu_item->signal_connect
+        ('activate',
+         sub {
+             my $dialog = create_help_dialog();
+             $dialog->run();
+             $dialog->destroy();
+             while (Gtk3::events_pending())
+             {
+                 Gtk3::main_iteration();
+             }
+             return;
          });
     $menu_item->show();
 
@@ -1436,6 +1470,64 @@ sub create_password_dialog($details, $password)
          });
     $hbox->pack_start($entry, TRUE, TRUE, 0);
     $vbox->pack_start($hbox, TRUE, TRUE, 0);
+    $vbox->show_all();
+
+    return $dialog;
+
+}
+#
+##############################################################################
+#
+#   Routine      - create_help_dialog
+#
+#   Description  - Create a dialog that displays help text regarding the
+#                  syntax of the main settings file.
+#
+#   Data         - None.
+#
+##############################################################################
+
+
+
+sub create_help_dialog()
+{
+
+    my ($dialog,
+        $layout,
+        $max_width,
+        $scrolledwindow,
+        $textbuffer,
+        $textview,
+        $vbox);
+
+    $dialog = Gtk3::Dialog->new(__('Settings Help'),
+                                undef,
+                                [],
+                                'gtk-close' => 'close');
+    $dialog->set_icon_name(ICON_NAME);
+    $dialog->set_default_response('close');
+    $dialog->set_position('center-always');
+    $vbox = $dialog->get_content_area();
+    $vbox->set_border_width(5);
+    $vbox->set_spacing(5);
+    $scrolledwindow = Gtk3::ScrolledWindow->new();
+    $textview = Gtk3::TextView->new();
+    $textview->modify_font(Pango::FontDescription::from_string('monospace'));
+    $textbuffer = $textview->get_buffer()->set_text($settings_help);
+    $textview->set_editable(FALSE);
+    $textview->set_cursor_visible(FALSE);
+    $scrolledwindow->add_with_viewport($textview);
+    $max_width = 0;
+    foreach my $line (split(/\n/, $settings_help))
+    {
+        my $length = length($line);
+        $max_width = $length if ($length >= $max_width);
+    }
+    $max_width += 4;
+    $layout = Pango::Layout->new($textview->get_pango_context());
+    $layout->set_text(' ' x $max_width);
+    $scrolledwindow->set_size_request(($layout->get_pixel_size())[0], 500);
+    $vbox->pack_start($scrolledwindow, TRUE, TRUE, 0);
     $vbox->show_all();
 
     return $dialog;
@@ -1791,7 +1883,7 @@ sub load_settings($sessions, $settings)
         }
         if (defined($fh = IO::File->new($fname, 'w')))
         {
-            $fh->print($setting_header);
+            $fh->print($new_settings_contents);
             $fh->close();
         }
         else
