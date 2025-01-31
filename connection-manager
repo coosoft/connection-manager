@@ -938,7 +938,7 @@ sub handle_rdp_menu_entry($details)
                                               . 'unreachable.');
                             return;
                         }],
-                   [qr/ERRINFO_LOGOFF_BY_USER/ =>
+                   [qr/ERRINFO_LOGOFF_BY_USER|ERRCONNECT_CONNECT_CANCELLED/ =>
                         sub
                         {
                             $err = 0;
