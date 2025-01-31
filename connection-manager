@@ -1201,8 +1201,8 @@ sub create_rdp_connection_dialog($input)
     my ($combobox,
         $dialog,
         $entry,
+        $hbox,
         $label,
-        $table,
         $vbox);
 
     $dialog = Gtk3::Dialog->new(__('RDP Connection Details'),
@@ -1217,11 +1217,14 @@ sub create_rdp_connection_dialog($input)
     $dialog->set_resizable(FALSE);
     $vbox = $dialog->get_content_area();
     $vbox->set_border_width(5);
-    $table = Gtk3::Table->new(1, 2, FALSE);
+    $vbox->set_spacing(5);
+    $hbox = Gtk3::Box->new('horizontal', 5);
+    $hbox->set_border_width(0);
+    $hbox->set_homogeneous(FALSE);
     $label = Gtk3::Label->new(__('Connection details '
                                  . '([domain\]user@host[:port]):'));
     $label->set_alignment(1, 0.5);
-    $table->attach_defaults($label, 0, 1, 0, 1);
+    $hbox->pack_start($label, FALSE, TRUE, 0);
     $combobox = Gtk3::ComboBoxText->new_with_entry();
     foreach my $entry (load_history('RDP'))
     {
@@ -1258,8 +1261,8 @@ sub create_rdp_connection_dialog($input)
                  update_history('RDP', $$input);
              }
          });
-    $table->attach_defaults($combobox, 1, 2, 0, 1);
-    $vbox->pack_start($table, 0, 0, 4);
+    $hbox->pack_start($combobox, TRUE, TRUE, 0);
+    $vbox->pack_start($hbox, TRUE, TRUE, 0);
     $vbox->show_all();
 
     return $dialog;
@@ -1287,8 +1290,8 @@ sub create_vnc_connection_dialog($input)
     my ($combobox,
         $dialog,
         $entry,
+        $hbox,
         $label,
-        $table,
         $vbox);
 
     $dialog = Gtk3::Dialog->new(__('VNC Connection Details'),
@@ -1303,11 +1306,14 @@ sub create_vnc_connection_dialog($input)
     $dialog->set_resizable(FALSE);
     $vbox = $dialog->get_content_area();
     $vbox->set_border_width(5);
-    $table = Gtk3::Table->new(1, 2, FALSE);
+    $vbox->set_spacing(5);
+    $hbox = Gtk3::Box->new('horizontal', 5);
+    $hbox->set_border_width(0);
+    $hbox->set_homogeneous(FALSE);
     $label = Gtk3::Label->new(__('Connection details '
                                  . '([profile:]host[:port]):'));
     $label->set_alignment(1, 0.5);
-    $table->attach_defaults($label, 0, 1, 0, 1);
+    $hbox->pack_start($label, FALSE, TRUE, 0);
     $combobox = Gtk3::ComboBoxText->new_with_entry();
     foreach my $entry (load_history('VNC'))
     {
@@ -1343,8 +1349,8 @@ sub create_vnc_connection_dialog($input)
                  update_history('VNC', $$input);
              }
          });
-    $table->attach_defaults($combobox, 1, 2, 0, 1);
-    $vbox->pack_start($table, 0, 0, 4);
+    $hbox->pack_start($combobox, TRUE, TRUE, 0);
+    $vbox->pack_start($hbox, TRUE, TRUE, 0);
     $vbox->show_all();
 
     return $dialog;
@@ -1372,8 +1378,8 @@ sub create_password_dialog($details, $password)
 
     my ($dialog,
         $entry,
+        $hbox,
         $label,
-        $table,
         $vbox);
 
     $dialog = Gtk3::Dialog->new(__('RDP Password'),
@@ -1388,12 +1394,15 @@ sub create_password_dialog($details, $password)
     $dialog->set_resizable(FALSE);
     $vbox = $dialog->get_content_area();
     $vbox->set_border_width(5);
-    $table = Gtk3::Table->new(1, 2, FALSE);
+    $vbox->set_spacing(5);
+    $hbox = Gtk3::Box->new('horizontal', 5);
+    $hbox->set_border_width(0);
+    $hbox->set_homogeneous(FALSE);
     $label = Gtk3::Label->new(__x('Password for {user}@{host}:',
                                   user => $details->{user},
                                   host => $details->{host}));
     $label->set_alignment(1, 0.5);
-    $table->attach_defaults($label, 0, 1, 0, 1);
+    $hbox->pack_start($label, FALSE, TRUE, 0);
     $entry = Gtk3::Entry->new();
     $entry->set_visibility(FALSE);
     $entry->set_text('');
@@ -1420,8 +1429,8 @@ sub create_password_dialog($details, $password)
                  $$password = $entry->get_text();
              }
          });
-    $table->attach_defaults($entry, 1, 2, 0, 1);
-    $vbox->pack_start($table, 0, 0, 4);
+    $hbox->pack_start($entry, TRUE, TRUE, 0);
+    $vbox->pack_start($hbox, TRUE, TRUE, 0);
     $vbox->show_all();
 
     return $dialog;
