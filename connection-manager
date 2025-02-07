@@ -360,7 +360,8 @@ our $VERSION = '1.0';
 #
 #   Routine      - Main Body Of Code
 #
-#   Description  - This is the main body of code for the mtn-browse script.
+#   Description  - This is the main body of code for the connection-manager
+#                  program.
 #
 #   Data         - @_           : The command line arguments.
 #                  Return Value : Unix exit code.
@@ -1157,14 +1158,23 @@ sub create_options_menu($sessions)
     $menu_item->signal_connect('event', \&title_event_cb);
     $menu_item->show();
 
-    $menu_item = Gtk3::MenuItem->new(__('_RDP'));
+    $menu_item = Gtk3::MenuItem->new(__('Ad Hoc _RDP Connection'));
     $menu->append($menu_item);
     $menu_item->signal_connect('activate', \&rdp_menu_entry_cb, -1);
     $menu_item->show();
 
-    $menu_item = Gtk3::MenuItem->new(__('_TigerVNC'));
+    $menu_item = Gtk3::MenuItem->new(__('Ad Hoc _VNC Connection'));
     $menu->append($menu_item);
     $menu_item->signal_connect('activate', \&adhoc_vnc_menu_entry_cb);
+    $menu_item->show();
+
+    $menu_item = Gtk3::MenuItem->new(__('Run _TigerVNC'));
+    $menu->append($menu_item);
+    $menu_item->signal_connect
+        ('activate',
+         sub {
+             run_command('xtigervncviewer');
+         });
     $menu_item->show();
 
     $menu_item = Gtk3::MenuItem->new(__('_Edit Preferences'));
